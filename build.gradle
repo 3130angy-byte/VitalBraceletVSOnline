@@ -1,0 +1,144 @@
+plugins {
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+
+    // ============================================================
+    // VB-DIM-Reader
+    // ============================================================
+    implementation files('libs/VB-DIM-Reader-2.1.0.jar')
+
+    // Dependencias utilizadas por VB-DIM-Reader
+    implementation 'org.json:json:20240303'
+    implementation 'commons-io:commons-io:2.11.0'
+    implementation 'org.slf4j:slf4j-api:1.7.32'
+    implementation 'at.favre.lib:bytes:1.5.0'
+}
+
+javafx {
+    version = '21.0.4'
+
+    modules = [
+            'javafx.controls',
+            'javafx.graphics'
+    ]
+}
+
+application {
+    mainClass = 'org.example.Main'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+// Los .java están en UTF-8 (tildes, ñ, "…"). Sin esto, en Windows javac los
+// lee como windows-1252: falla con algunos caracteres y corrompe los textos
+// en español (incluido el prompt que se le manda a la IA).
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// ============================================================
+// VS Online -- Fase 1 (esqueleto de red)
+//   .\gradlew.bat runServer                         servidor en el puerto 7777
+//   .\gradlew.bat runClient --args="--ventanas=2"   dos jugadores de prueba
+// ============================================================
+tasks.register('runServer', JavaExec) {
+    group = 'vs online'
+    description = 'Arranca el servidor VS Online en esta PC.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.example.online.server.VsServer'
+    jvmArgs '-Dfile.encoding=UTF-8'
+    standardInput = System.in
+}
+
+tasks.register('runClient', JavaExec) {
+    group = 'vs online'
+    description = 'Abre la ventana de prueba de la sala (acepta --host, --port, --name, --ventanas).'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.example.online.client.LobbyTestLauncher'
+    jvmArgs '-Dfile.encoding=UTF-8'
+}
+// ============================================================
+// 0.0.3.1 -- versión para probadores del VS Online (sin asistente ni chat IA)
+//   .\gradlew.bat runTester        prueba la edición 0.0.3.1 desde el código
+//   .\gradlew.bat packageTester    arma el paquete con Java incluido (jpackage)
+//                                  en ..\DIGIMON-ASSISTANT 0.0.3.1\ + un .zip
+// Mismo código que 0.0.3: solo cambia -Ddigimon.edicion=tester (ver Edition).
+// -Ddigimon.servidor = servidor por defecto de los probadores (la IP de
+// Tailscale del anfitrión): propiedad servidorProbadores en
+// ~/.gradle/gradle.properties (fuera del repo) o -PservidorProbadores=100.x.x.x
+// ============================================================
+def testerHost = project.findProperty('servidorProbadores') ?: '127.0.0.1'
+def testerOut = file("${projectDir}/../DIGIMON-ASSISTANT 0.0.3.1")
+def testerName = 'DigimonVS-0.0.3.1'
+
+tasks.register('runTester', JavaExec) {
+    group = 'vs online'
+    description = 'Arranca la edición 0.0.3.1 (sin asistente ni chat IA).'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'org.example.Launcher'
+    jvmArgs '-Dfile.encoding=UTF-8', '-Ddigimon.edicion=tester', "-Ddigimon.servidor=${testerHost}"
+}
+
+tasks.register('testerInput', Sync) {
+    dependsOn jar
+    from jar
+    from configurations.runtimeClasspath
+    into layout.buildDirectory.dir('tester/input')
+}
+
+tasks.register('packageTester') {
+    group = 'vs online'
+    description = 'Arma 0.0.3.1 para probadores: carpeta con Java incluido y un .zip listo para compartir.'
+    dependsOn 'testerInput'
+    doLast {
+        def jdk = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(17) }.get().metadata.installationPath
+        def jpackage = jdk.file('bin/jpackage.exe').asFile
+        def input = layout.buildDirectory.dir('tester/input').get().asFile
+        def work = layout.buildDirectory.dir('tester').get().asFile
+        def image = new File(work, 'image')
+        ant.delete(dir: image, failonerror: false)
+
+        // Segundo ejecutable: el servidor, con consola (apagar / jugadores / expulsar).
+        def serverProps = new File(work, 'servidor.properties')
+        serverProps.text = 'main-class=org.example.online.server.VsServer\n' +
+                'win-console=true\n' +
+                'java-options=-Dfile.encoding=UTF-8\n'
+
+        def cmd = [jpackage.absolutePath, '--type', 'app-image',
+                    '--name', testerName,
+                    '--input', input,
+                    '--main-jar', jar.archiveFileName.get(),
+                    '--main-class', 'org.example.Launcher',
+                    '--java-options', '-Dfile.encoding=UTF-8',
+                    '--java-options', '-Ddigimon.edicion=tester',
+                    '--java-options', "-Ddigimon.servidor=${testerHost}",
+                    '--add-launcher', "Servidor VS Online=${serverProps}",
+                    '--app-version', '0.0.3',
+                    '--vendor', 'Digimon Project',
+                    '--dest', image].collect { it.toString() }
+        def proc = new ProcessBuilder(cmd).inheritIO().start()
+        if (proc.waitFor() != 0) throw new GradleException("jpackage falló (código ${proc.exitValue()})")
+
+        testerOut.mkdirs()
+        ant.delete(dir: new File(testerOut, testerName), failonerror: false)
+        ant.delete(file: new File(testerOut, "${testerName}.zip"), failonerror: false)
+        ant.copy(todir: testerOut) { fileset(dir: image) }
+        ant.copy(file: file("tester/LEEME.txt"), todir: testerOut)
+        ant.zip(destfile: new File(testerOut, "${testerName}.zip")) {
+            fileset(dir: image)
+            fileset(file: file('tester/LEEME.txt'))
+        }
+        println "Listo: ${testerOut}"
+    }
+}
