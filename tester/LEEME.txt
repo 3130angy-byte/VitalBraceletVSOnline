@@ -49,8 +49,16 @@ la VS DIM nueva y vuelve la pantalla de inicio.
 - Si cierras el programa SIN retirarlo, el saldo se pierde (en esta versión
   no se guarda).
 - La VS DIM original no se toca. Pasa al Vital Bracelet la NUEVA (carpeta
-  "devoluciones"). Esto está EN PRUEBA: hazlo con tu copia de seguridad a
-  mano y, si puedes, primero con un Digimon que no te importe perder.
+  "devoluciones"). Hazlo con tu copia de seguridad a mano.
+- LIMITACIÓN CONOCIDA: el Vital Bracelet acepta el archivo, pero todavía NO
+  toma el resultado: el Digimon vuelve sin recompensa ni castigo, como si no
+  hubiera peleado. Se está investigando.
+
+Licencia
+--------
+El código y el arte original son MIT (LICENSE). Digimon y Vital Bracelet son
+marcas de Bandai; proyecto de fans no afiliado a Bandai. Material de
+terceros: THIRD-PARTY-NOTICES.md.
 
 Dónde quedan tus datos
 ----------------------

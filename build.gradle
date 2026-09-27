@@ -135,9 +135,13 @@ tasks.register('packageTester') {
         ant.delete(file: new File(testerOut, "${testerName}.zip"), failonerror: false)
         ant.copy(todir: testerOut) { fileset(dir: image) }
         ant.copy(file: file("tester/LEEME.txt"), todir: testerOut)
+        ant.copy(file: file("LICENSE"), todir: testerOut)
+        ant.copy(file: file("THIRD-PARTY-NOTICES.md"), todir: testerOut)
         ant.zip(destfile: new File(testerOut, "${testerName}.zip")) {
             fileset(dir: image)
-            fileset(file: file('tester/LEEME.txt'))
+            fileset(file: file("tester/LEEME.txt"))
+            fileset(file: file("LICENSE"))
+            fileset(file: file("THIRD-PARTY-NOTICES.md"))
         }
         println "Listo: ${testerOut}"
     }

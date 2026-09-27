@@ -154,8 +154,15 @@ se abre el Explorador con el archivo seleccionado y vuelve la pantalla de
 inicio (se muestra ANTES de cerrar la ventana del Digimon: sin ventanas,
 JavaFX cerraría el programa). La VS DIM no tiene un campo conocido de
 "ganó/perdió": el resultado viaja como Vital Values. Sin persistencia: si se
-cierra el programa sin retirar, el saldo se pierde. SIN PROBAR todavía en el
-VB real (hacerlo con copia y un Digimon prescindible).
+cierra el programa sin retirar, el saldo se pierde. **PROBADO EN EL VB REAL
+(2026-09-26, usuario): NO FUNCIONA como transporte de resultados.** Una
+devolución con -500 VV fue aceptada por el VB (checksum válido), pero el
+Digimon volvió como si no hubiera peleado: sin recompensa ni castigo. El VB
+IGNORA los Vital Values escritos en la VS DIM al recibirla (probablemente usa
+su propia copia interna). Falta descubrir cómo el VB recibe un resultado de
+batalla por VS DIM: pista sin confirmar = "Resultado del VS.bin" (flags
+`a234a404`, [0]=2 [4]=3 [5]=1, checksum inválido) — averiguar de dónde salió.
+Hasta entonces, RETIRAR devuelve al Digimon sin cambios reales.
 
 **Identidad de nombre** (sistema narrativo): `DigimonNameIdentity` guarda
 `slotNameHistory` (mapa slot→nombre), `uniqueName` opcional, y un flag
