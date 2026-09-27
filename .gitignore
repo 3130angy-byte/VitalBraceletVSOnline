@@ -41,3 +41,5 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+### DIM cards y VS DIM (contenido de Bandai o del usuario): nunca al repositorio ###
+*.bin
