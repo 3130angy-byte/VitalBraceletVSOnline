@@ -72,6 +72,12 @@ class ClientConnection implements Runnable {
     volatile int partnerStage;
     volatile int partnerPowerTrophies;
     volatile int partnerAttribute;
+    /** Cuenta de quien se conectó (TailscaleIdentity): la clave y cómo se muestra. */
+    volatile String identity = "";
+    volatile String identityLabel = "";
+    /** Nombre con el que pidió permiso mientras espera la respuesta del anfitrión (null = no espera). */
+    volatile String requestedName;
+    volatile long waitingSince;
     /** Batallas Oficiales: disponible para que lo reten, y si está peleando ahora. */
     volatile boolean available;
     volatile boolean inBattle;
@@ -136,26 +142,49 @@ class ClientConnection implements Runnable {
         String type = m.optString("t", "");
 
         if (id <= 0) {
+            // Esperando el permiso del anfitrión: solo se acepta el ping (el servidor lo deja entrar o lo despide).
+            if (requestedName != null) return true;
             // Antes del "hello" no se acepta nada más.
             if (!type.equals("hello")) return fail("El primer mensaje debe ser hello.");
             if (m.optInt("v", -1) != Protocol.VERSION) return fail("Versión de protocolo distinta a la del servidor.");
             String cleanName = Protocol.cleanText(m.optString("name"), Protocol.MAX_NAME_LENGTH);
-            if (cleanName.isEmpty()) return fail("Falta el nombre.");
-            // Lista de acceso del anfitrión (0.0.3.z): si no estás, solo quedan las funciones locales.
-            if (!AccessList.load().isAllowed(cleanName)) {
-                VsServer.log("Rechazado (no está en la lista de acceso): " + cleanName + " desde " + remoteIp());
-                server.noteRejected(remoteIp());
-                send(Protocol.msg("error").put("code", "notAllowed").put("msg", "Tu nombre (" + cleanName
-                        + ") no está en la lista del anfitrión: no puedes entrar a la sala. Las funciones locales"
-                        + " (Batalla aleatoria, ARENA local, Laboratorio) siguen disponibles."));
-                return false;
-            }
-            int joined = server.join(this, cleanName);
-            if (joined == VsServer.ROOM_FULL) return fail("La sala está llena.");
             try {
                 socket.setSoTimeout(Protocol.IDLE_TIMEOUT_SECONDS * 1000); // ya se presentó: inactividad normal
             } catch (java.net.SocketException ignored) {
             }
+            // Capa 1: la cuenta de Tailscale desde la que llega (el nombre se puede inventar; la cuenta no).
+            TailscaleIdentity.Identity who = TailscaleIdentity.of(socket.getInetAddress());
+            identity = who.key();
+            identityLabel = who.label();
+            AccessList list = AccessList.load();
+            // Cuenta ya aceptada: entra con SU nombre registrado aunque escriba otro o ninguno
+            // (desde el celular con la misma cuenta, sin tener que escribirlo exacto).
+            java.util.Optional<String> registered = list.nameFor(identity);
+            if (registered.isPresent()) {
+                if (!registered.get().equalsIgnoreCase(cleanName)) {
+                    VsServer.log(identityLabel + " escribió \"" + cleanName + "\": entra con su nombre registrado, " + registered.get());
+                }
+                return enter(registered.get());
+            }
+            if (cleanName.isEmpty()) return fail("Falta el nombre.");
+            if (list.isAllowed(cleanName, identity)) return enter(cleanName); // desde esta PC
+            // Capa 2: sin permiso, PIDE PERMISO y espera a que el anfitrión responda.
+            AccessList.Asked asked = AccessList.ask(cleanName, identity, identityLabel, remoteIp());
+            if (asked == AccessList.Asked.FULL) {
+                server.noteRejected(remoteIp());
+                send(Protocol.msg("error").put("code", "notAllowed").put("msg", "El anfitrión tiene muchas solicitudes"
+                        + " sin responder: vuelve a intentarlo más tarde. Las funciones locales siguen disponibles."));
+                return false;
+            }
+            // Una solicitud NUEVA cuenta como rechazo: cambiar de nombre una y otra vez termina bloqueando la IP.
+            if (asked == AccessList.Asked.NEW) server.noteRejected(remoteIp());
+            VsServer.log("Solicitud de acceso: " + cleanName + " (" + identityLabel + ") desde " + remoteIp());
+            requestedName = cleanName;
+            waitingSince = System.currentTimeMillis();
+            String host = list.host().isEmpty() ? "el anfitrión" : list.host();
+            send(Protocol.msg("accessPending").put("host", host).put("seconds", VsServer.WAIT_FOR_PERMISSION_SECONDS)
+                    .put("msg", "Le pediste permiso a " + host + " para entrar a su sala. Espera a que te acepte..."));
+            server.waitForPermission(this);
             return true;
         }
 
@@ -265,6 +294,13 @@ class ClientConnection implements Runnable {
         if (!o.has(key)) return false;
         int v = o.optInt(key, Integer.MIN_VALUE);
         return v >= min && v <= max;
+    }
+
+    /** Entra a la sala. Devuelve false (y avisa) si está llena. */
+    boolean enter(String cleanName) {
+        requestedName = null;
+        if (server.join(this, cleanName) == VsServer.ROOM_FULL) return fail("La sala está llena.");
+        return true;
     }
 
     private boolean fail(String reason) {

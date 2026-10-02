@@ -508,6 +508,7 @@ public class TeleportAnimator {
         scene.setFill(Color.TRANSPARENT);
 
         portalStage = new Stage();
+        org.example.ui.DesktopLayer.attach(portalStage);
         portalStage.initStyle(StageStyle.TRANSPARENT);
         portalStage.setAlwaysOnTop(true);
         portalStage.setScene(scene);

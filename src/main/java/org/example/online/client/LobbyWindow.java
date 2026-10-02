@@ -277,7 +277,10 @@ public final class LobbyWindow {
                 myId = m.getInt("id");
                 JSONObject team = currentTeam();
                 if (team != null) client.sendDigimon(team);
-                status.setText("Conectado como " + name + " a " + host + ":" + port + " (" + m.optString("room") + ")");
+                // El servidor dice con qué nombre entraste: una cuenta ya aceptada entra con el suyo registrado.
+                String entered = m.optString("name", name);
+                status.setText("Conectado como " + entered + " a " + host + ":" + port + " (" + m.optString("room") + ")");
+                if (!entered.equalsIgnoreCase(name)) addChatLine("* Entraste como " + entered + ", el nombre registrado de tu cuenta.");
             }
             case "snapshot" -> {
                 JSONArray players = m.getJSONArray("players");
@@ -337,16 +340,29 @@ public final class LobbyWindow {
                 retry.play();
             }
             case "chat" -> addChatLine(m.optString("name") + ": " + m.optString("text"));
+            case "accessPending" -> {
+                // Pediste permiso: el servidor te deja entrar solo cuando el anfitrión acepta.
+                status.setText("Esperando el permiso de " + m.optString("host", "el anfitrión") + "...");
+                addChatLine("* " + m.optString("msg"));
+                addChatLine("* Si en " + (m.optInt("seconds", 180) / 60) + " minutos no responde, tu solicitud queda guardada.");
+            }
             case "error" -> {
                 String code = m.optString("code");
-                if ("notAllowed".equals(code) || "removed".equals(code)) {
-                    // Lista de acceso del anfitrión: sin permiso no hay sala; se cierra y tu Digimon vuelve.
+                String header = switch (code) {
+                    case "notAllowed" -> "No puedes entrar a la sala";
+                    case "removed" -> "Saliste del servidor";
+                    case "rejected" -> "El anfitrión no aceptó tu solicitud";
+                    case "pendingTimeout" -> "Sin respuesta del anfitrión";
+                    default -> null;
+                };
+                if (header != null) {
+                    // Acceso del anfitrión: sin permiso no hay sala; se cierra y tu Digimon vuelve.
                     status.setText(m.optString("msg"));
                     javafx.scene.control.Alert alert = new javafx.scene.control.Alert(
                             javafx.scene.control.Alert.AlertType.INFORMATION, m.optString("msg"));
                     alert.initOwner(stage);
                     alert.setTitle("VS Online");
-                    alert.setHeaderText("notAllowed".equals(code) ? "No estás en la lista del anfitrión" : "Saliste del servidor");
+                    alert.setHeaderText(header);
                     alert.setOnHidden(e -> stage.close());
                     alert.show();
                 } else {

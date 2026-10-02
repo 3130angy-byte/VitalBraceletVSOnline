@@ -6,6 +6,27 @@ entra a una sala en línea para enfrentarse a los Digimon de otros jugadores.
 > Proyecto de fans sin fines de lucro, **no afiliado ni respaldado por Bandai**.
 > **Versión de prueba 0.0.3.1.**
 
+## Primero: tu cuenta para jugar en línea (2 minutos)
+
+Para entrar a la sala del VS Online necesitas una cuenta de
+[Tailscale](https://tailscale.com/), una red privada gratuita que conecta tu PC
+con la del anfitrión. **Esa cuenta es tu registro**: no hay otra cuenta ni otra
+contraseña.
+
+1. Pídele al anfitrión su **enlace de invitación** (por ejemplo, por Discord).
+2. Ábrelo y **crea tu cuenta de Tailscale entrando con Google, Microsoft, GitHub
+   o Apple** (no se crea una contraseña nueva).
+3. **Instala la app de Tailscale** en tu PC, inicia sesión con esa misma cuenta y
+   déjala **conectada** cada vez que juegues.
+4. **Acepta la invitación**: verás el equipo del anfitrión con su IP
+   `100.x.x.x`. Esa es la IP que escribes en *Servidor* al abrir el juego.
+5. En el juego, **VS ONLINE**: la primera vez **pides permiso** y esperas en la
+   sala hasta que el anfitrión te acepte. Desde ahí quedas registrado: entras
+   directo y tu cuenta recuerda tu nombre.
+
+Sin cuenta igual puedes usar todo lo local (escritorio, Batalla aleatoria,
+ARENA contra la máquina, Laboratorio).
+
 ## Descargar y jugar (Windows)
 
 1. Descarga el `.zip` desde **[Releases](../../releases)**.
@@ -54,22 +75,33 @@ entra a una sala en línea para enfrentarse a los Digimon de otros jugadores.
 
 ## Servidor del VS Online
 
-El descargable **no trae ningún servidor puesto**. Los servidores tienen una
-**lista de acceso**: solo entran los nombres que el anfitrión agregó (máx. 20).
-Si quieres probar la sala del autor, **pide permiso** indicando el nombre de
-usuario con el que entrarás; te pasará la IP para escribirla al iniciar. Si tu
-nombre no está en la lista, la sala te avisa y sigues con las funciones locales.
+El descargable **no trae ningún servidor puesto**. Para entrar a una sala:
+
+1. El anfitrión te invita a su equipo por [Tailscale](https://tailscale.com/)
+   (creas tu cuenta de Tailscale con Google, Microsoft, GitHub o Apple e
+   instalas la app) y te pasa su IP (`100.x.x.x`).
+2. Escribes esa IP al iniciar y entras a VS ONLINE: la primera vez **pides
+   permiso** y esperas en la sala. El anfitrión ve tu nombre junto a tu cuenta de
+   Tailscale y te acepta (o no).
+3. Desde entonces tu nombre queda **atado a tu cuenta**: entras directo y nadie
+   más puede usar tu nombre en esa sala. Tu cuenta recuerda tu nombre: aunque
+   escribas otro (o entres desde otro equipo con la misma cuenta), entras como tú.
+
+Si no te aceptan, sigues con todas las funciones locales.
 
 Para montar tu propio servidor desde el código: `.\gradlew.bat runServer`
-(consola con `jugadores`, `expulsar <nombre>`, `apagar`, `ayuda`; puerto 7777).
-Los jugadores se conectan con la IP de tu PC, por ejemplo a través de
-[Tailscale](https://tailscale.com/). La lista de acceso es el archivo
-`DigimonProjectDatanfigista-acceso.txt` (una persona por línea;
-`anfitrion=TuNombre` para ti); el servidor la relee sola y saca de la sala a
-quien retires. Una conexión que no se identifica en 10 s se corta y una IP con
-muchos nombres rechazados queda bloqueada 10 minutos. Ajustes del servidor y recompensas:
-archivos `.properties` en `DigimonProjectData\config` (en `D:\` si existe; si
-no, en tu carpeta de usuario).
+(puerto 7777). Consola: `jugadores`, `expulsar <número>`, `solicitudes`,
+`aceptar <número>`, `rechazar <número>`, `apagar`, `ayuda`. El servidor le
+pregunta a Tailscale de tu PC (`tailscale whois`) de qué cuenta viene cada
+conexión; desde tu propia PC siempre entras. Archivos (en
+`DigimonProjectData\config`): `lista-acceso.txt` (quién tiene permiso y su
+cuenta) y `solicitudes-acceso.txt` (pedidos pendientes, vencen a las 24 h).
+Retirar a alguien lo saca de la sala en unos segundos y no es un baneo: puede
+volver a pedir permiso. Una conexión que no se identifica en 10 s se corta y una
+IP con muchos pedidos o nombres rechazados seguidos queda bloqueada 10 minutos.
+Ajustes del servidor y recompensas: archivos `.properties` en
+`DigimonProjectData\config` (en `D:\` si existe; si no, en tu carpeta de
+usuario).
 
 ## Para desarrolladores: leer y escribir VS DIM
 

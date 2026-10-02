@@ -24,6 +24,7 @@ import org.example.lab.DesktopTeam;
 import org.example.lab.Digidex;
 import org.example.lab.LabStorage;
 import org.example.lab.LabWindow;
+import org.example.online.AccessList;
 import org.example.online.client.LobbyWindow;
 import org.example.ui.StartScreen;
 
@@ -66,7 +67,30 @@ public class Main extends Application {
         }
         stage.setTitle("V-PET " + Edition.VERSION);
         LabWindow.setDesktopTeam(desktopTeam);
+        LabWindow.setOnClosing(this::showStartScreenIfDesktopEmpty);
+        if (Edition.ADMIN) watchAccessRequests();
         showStartScreen();
+    }
+
+    /**
+     * 0.0.3.z: cuando alguien pide permiso para entrar a tu sala, tu Digimon te
+     * avisa (y la pestaña ACCESO lo muestra). Una vez por pedido: si la misma
+     * persona vuelve a pedir, se avisa de nuevo.
+     */
+    private void watchAccessRequests() {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        AccessList.requests().forEach(r -> seen.add(r.id() + "@" + r.at()));
+        javafx.animation.Timeline poll = new javafx.animation.Timeline(new javafx.animation.KeyFrame(
+                javafx.util.Duration.seconds(3), e -> {
+                    for (AccessList.Request r : AccessList.requests()) {
+                        if (!seen.add(r.id() + "@" + r.at())) continue;
+                        registry.primary().map(DigimonInstance::getAiController).ifPresent(ai -> ai.announce(
+                                r.name() + " te pide permiso para entrar a tu sala. Respóndele en LAB > ACCESO."));
+                        LabWindow.refreshIfOpen();
+                    }
+                }));
+        poll.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        poll.play();
     }
 
     /**
@@ -138,12 +162,27 @@ public class Main extends Application {
         }
     };
 
-    /** Nombre y servidor guardados de la vez anterior: se piden antes de cargar la VS DIM. */
+    /**
+     * Nombre y servidor guardados de la vez anterior: se piden antes de cargar la VS DIM.
+     * La pantalla de inicio solo está cuando hace falta (pedido del usuario, 2026-10-02):
+     * se va al cargar un Digimon o al abrir el Laboratorio, y vuelve cuando el escritorio
+     * queda vacío (retirar al último, o cerrar el Laboratorio sin haber sacado a nadie).
+     */
     private void showStartScreen() {
         navigationStage.setScene(StartScreen.build(AssistantSettings.savedPlayerName(), AssistantSettings.onlineHost(),
-                this::onLoadVsDim, LabWindow::open));
+                this::onLoadVsDim, this::openLabFromStart));
         navigationStage.show();
         navigationStage.toFront();
+    }
+
+    private void showStartScreenIfDesktopEmpty() {
+        if (registry.getActiveInstances().isEmpty()) showStartScreen();
+    }
+
+    /** Primero se abre el Laboratorio y después se oculta el inicio: nunca hay un instante sin ventanas. */
+    private void openLabFromStart() {
+        LabWindow.open();
+        navigationStage.hide();
     }
 
     // ---------- VS DIM: Digimon traído del Vital Bracelet ----------
@@ -156,8 +195,8 @@ public class Main extends Application {
     private void onLoadVsDim(String playerName, String host) {
         AssistantSettings.saveStartScreen(playerName, host);
         // 0.0.3.z: el anfitrión siempre puede entrar a su propio servidor (lista de acceso).
-        if (Edition.ADMIN && org.example.online.AccessList.load().host().isEmpty() && !playerName.isBlank()) {
-            org.example.online.AccessList.setHost(playerName);
+        if (Edition.ADMIN && AccessList.load().host().isEmpty() && !playerName.isBlank()) {
+            AccessList.setHost(playerName);
         }
 
         FileChooser chooser = new FileChooser();
@@ -226,7 +265,8 @@ public class Main extends Application {
         instance.setOnRetired(retired -> {
             registry.remove(retired.getInstanceId());
             LabWindow.refreshIfOpen();
-            showStartScreen(); // pedido del usuario: tras retirar vuelve la pantalla de inicio
+            // Tras retirar vuelve la pantalla de inicio, salvo que quede otro Digimon o el Laboratorio abierto.
+            if (!LabWindow.isOpen()) showStartScreenIfDesktopEmpty();
         });
         registry.putAt(index, instance);
         try {
@@ -279,7 +319,7 @@ public class Main extends Application {
     private void showError(String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR, message);
         alert.setHeaderText(null);
-        alert.initOwner(navigationStage);
+        if (navigationStage.isShowing()) alert.initOwner(navigationStage); // oculta mientras hay Digimon o Laboratorio
         alert.showAndWait();
     }
 

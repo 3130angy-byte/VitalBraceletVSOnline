@@ -11,15 +11,34 @@ el resultado de sus batallas para devolverlo al Vital Bracelet.
 Esta versión NO tiene asistente ni chat con IA. No necesitas instalar Java:
 viene incluido.
 
+PRIMERO: TU CUENTA PARA JUGAR EN LÍNEA (2 minutos)
+---------------------------------------------------
+Para entrar a la sala del VS Online necesitas una cuenta de Tailscale (gratis):
+una red privada que conecta tu PC con la del anfitrión. ESA CUENTA ES TU
+REGISTRO: no hay otra cuenta ni otra contraseña.
+
+1. Pídele al anfitrión su ENLACE DE INVITACIÓN (por ejemplo, por Discord).
+2. Ábrelo y CREA TU CUENTA de Tailscale entrando con Google, Microsoft,
+   GitHub o Apple (no se crea una contraseña nueva).
+3. INSTALA la app de Tailscale en tu PC, inicia sesión con esa misma cuenta
+   y déjala CONECTADA cada vez que juegues.
+4. ACEPTA la invitación: verás el equipo del anfitrión con su IP 100.x.x.x.
+   Esa es la IP que escribes en "Servidor" al abrir el juego.
+5. En el juego, VS ONLINE: la primera vez le PEDIRÁS PERMISO al anfitrión.
+   Espera en la sala ("Esperando el permiso de...") hasta que te acepte: él
+   ve tu nombre y tu cuenta de Tailscale. Desde ahí quedas registrado: entras
+   directo y nadie más puede usar tu nombre. Tu cuenta lo recuerda: aunque
+   escribas otro, o entres desde otro equipo con la misma cuenta, entras con
+   tu nombre de siempre. Si no responde en 3 minutos, tu pedido queda
+   guardado; vuelve a entrar más tarde.
+
+Sin cuenta, todo lo local funciona igual (escritorio, Batalla aleatoria, ARENA
+contra la máquina, Laboratorio).
+
 Antes de empezar
 ----------------
 1. Windows 10 u 11 de 64 bits.
-2. Tailscale instalado y unido a la red del anfitrión (él te manda la
-   invitación). Sin Tailscale no llegas al servidor.
-3. Pídele al anfitrión que te AGREGUE A SU LISTA con el nombre exacto que vas
-   a usar. Si tu nombre no está en su lista, no entras a la sala del VS
-   Online (las funciones locales sí funcionan igual).
-4. Tu Digimon sacado del Vital Bracelet como VS DIM (.bin), con tu programa
+2. Tu Digimon sacado del Vital Bracelet como VS DIM (.bin), con tu programa
    de siempre para leer la tarjeta.
    GUARDA UNA COPIA de ese archivo antes de todo.
 
@@ -29,7 +48,7 @@ Cómo jugar
    (dentro de la carpeta DigimonVS-0.0.3.1).
    Si Windows avisa "Windows protegió su PC": "Más información" > "Ejecutar
    de todas formas" (el programa no tiene firma digital).
-2. Escribe tu nombre de usuario (el mismo que le diste al anfitrión) y, en
+2. Escribe tu nombre de usuario y, en
    "Servidor", la IP de Tailscale que te pase el anfitrión (viene "100.x" como
    ejemplo). Si no la tienes, el juego arranca igual con las funciones locales.
 3. "Cargar mi Digimon (VS DIM)": elige tu .bin y escribe cuántos días tenía.
@@ -37,7 +56,7 @@ Cómo jugar
    Aparecerá en tu escritorio saliendo de un portal. Puedes tener 2 Digimon
    (puesto 1 y puesto 2).
 4. Clic derecho sobre tu Digimon = menú.
-   - BATALLA > VS ONLINE: entra a la sala (si estás en la lista). Camina con
+   - BATALLA > VS ONLINE: entra a la sala (la primera vez, pide permiso). Camina con
      clic. El NPC "Batalla oficial" te deja retar a otros: Batalla Libre (con
      el bono de tus trofeos), Batalla Original (sin bono) o ARENA 2 vs 2. La
      PC de la sala abre tu Laboratorio para cambiar tu equipo.

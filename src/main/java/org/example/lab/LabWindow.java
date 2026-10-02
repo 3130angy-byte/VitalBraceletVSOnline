@@ -68,6 +68,13 @@ public final class LabWindow {
         team = desktopTeam;
     }
 
+    /** Main: al cerrar el Laboratorio sin Digimon en el escritorio vuelve la pantalla de inicio. */
+    private static Runnable onClosing;
+
+    public static void setOnClosing(Runnable action) {
+        onClosing = action;
+    }
+
     /** Tras cambiar el escritorio (sacar, reemplazar, retirar, intercambiar), si la ventana está abierta. */
     public static void refreshIfOpen() {
         if (instance != null && instance.stage.isShowing()) instance.refreshAll();
@@ -81,6 +88,10 @@ public final class LabWindow {
             if (c.id().equals(members.get(i).capsuleId())) return "Puesto " + (i + 1);
         }
         return "";
+    }
+
+    public static boolean isOpen() {
+        return instance != null && instance.stage.isShowing();
     }
 
     /** Abre el Laboratorio, o lo trae al frente si ya estaba abierto. */
@@ -124,6 +135,8 @@ public final class LabWindow {
         tabs.getSelectionModel().selectedIndexProperty().addListener((o, a, b) -> refreshAll());
         stage.setTitle("LABORATORIO");
         stage.setScene(new Scene(tabs, 760, 500));
+        // ANTES de ocultarse: si la pantalla de inicio vuelve, nunca hay un instante sin ventanas.
+        stage.setOnHiding(e -> { if (onClosing != null) onClosing.run(); });
     }
 
     private void refreshAll() {

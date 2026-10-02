@@ -277,6 +277,7 @@ public class DigimonInstance {
         scene.setFill(Color.TRANSPARENT);
 
         stage = new Stage();
+        org.example.ui.DesktopLayer.attach(stage); // sin botón en la barra de tareas; sigue a la vista con "Mostrar escritorio"
         stage.initStyle(StageStyle.TRANSPARENT);
         stage.setAlwaysOnTop(true);
         stage.setScene(scene);

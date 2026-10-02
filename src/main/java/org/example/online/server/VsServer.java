@@ -180,7 +180,11 @@ public class VsServer {
                             clients.values().forEach(c -> log("  #" + c.id + " " + c.name + " (" + c.remoteIp() + ")"));
                         }
                         case "expulsar" -> kick(parts.length > 1 ? parts[1] : "");
-                        case "ayuda" -> log("Comandos: jugadores | expulsar <número> | apagar");
+                        case "solicitudes" -> listRequests();
+                        case "aceptar" -> answerRequest(parts.length > 1 ? parts[1] : "", true);
+                        case "rechazar" -> answerRequest(parts.length > 1 ? parts[1] : "", false);
+                        case "ayuda" -> log("Comandos: jugadores | expulsar <número> | solicitudes | aceptar <número>"
+                                + " | rechazar <número> | apagar");
                         case "" -> { }
                         default -> log("Comando desconocido. Escribe 'ayuda'.");
                     }
@@ -205,6 +209,42 @@ public class VsServer {
             log("Expulsado: " + c.name + " (#" + c.id + ")");
         } catch (NumberFormatException e) {
             log("Uso: expulsar <número>  (el número sale en 'jugadores')");
+        }
+    }
+
+    /** Consola: las solicitudes de acceso pendientes, numeradas desde 1. */
+    private void listRequests() {
+        List<AccessList.Request> pending = AccessList.requests();
+        if (pending.isEmpty()) {
+            log("No hay solicitudes de acceso.");
+            return;
+        }
+        for (int i = 0; i < pending.size(); i++) {
+            AccessList.Request r = pending.get(i);
+            log("  " + (i + 1) + ") " + r.name() + " -- " + r.label() + (r.note().isEmpty() ? "" : "  " + r.note()));
+        }
+        log("Escribe 'aceptar <número>' o 'rechazar <número>'.");
+    }
+
+    private void answerRequest(String numberText, boolean accept) {
+        List<AccessList.Request> pending = AccessList.requests();
+        int n;
+        try {
+            n = Integer.parseInt(numberText.trim());
+        } catch (NumberFormatException e) {
+            n = -1;
+        }
+        if (n < 1 || n > pending.size()) {
+            log("Uso: " + (accept ? "aceptar" : "rechazar") + " <número>  (el número sale en 'solicitudes')");
+            return;
+        }
+        AccessList.Request r = pending.get(n - 1);
+        if (accept) {
+            String error = AccessList.approve(r.id());
+            log(error != null ? error : "Aceptado: " + r.name() + " (" + r.label() + ")");
+        } else {
+            AccessList.reject(r.id());
+            log("Rechazado: " + r.name());
         }
     }
 
@@ -261,9 +301,20 @@ public class VsServer {
         return org.example.chat.AppPaths.config().resolve("apagar-servidor.senal");
     }
 
-    private volatile long accessListStamp = -1;
+    /** Cuánto espera alguien la respuesta del anfitrión antes de que se le pida volver más tarde. */
+    static final int WAIT_FOR_PERMISSION_SECONDS = 180;
+    /** Conexiones que pidieron permiso y esperan (todavía no están en la sala). */
+    private final Set<ClientConnection> waiting = ConcurrentHashMap.newKeySet();
 
-    /** Relee la lista de acceso si cambió y saca de la sala a quien ya no está (retirado, no baneado). */
+    void waitForPermission(ClientConnection connection) {
+        waiting.add(connection);
+    }
+
+    /**
+     * Cada 2 s: relee la lista de acceso y las solicitudes. Saca de la sala a
+     * quien ya no está (retirado, no baneado), deja entrar a quien esperaba y fue
+     * aceptado, y despide a quien fue rechazado o esperó demasiado.
+     */
     private void checkAccessList() {
         if (java.nio.file.Files.exists(emergencyFlag())) { // botón de emergencia del anfitrión
             try {
@@ -273,16 +324,35 @@ public class VsServer {
             shutdown("El anfitrión apagó el servidor.");
             return;
         }
-        long stamp = AccessList.lastModified();
-        if (stamp == accessListStamp) return;
-        accessListStamp = stamp;
         AccessList list = AccessList.load();
         for (ClientConnection c : clients.values()) {
-            if (list.isAllowed(c.name)) continue;
+            if (list.isAllowed(c.name, c.identity)) continue;
             c.send(Protocol.msg("error").put("code", "removed")
                     .put("msg", "El anfitrión te retiró del servidor. Tus funciones locales siguen disponibles."));
             c.closeGracefully();
             log("Retirado por la lista de acceso: " + c.name + " (#" + c.id + ")");
+        }
+        long now = System.currentTimeMillis();
+        for (ClientConnection c : waiting) {
+            String name = c.requestedName;
+            if (name == null) {
+                waiting.remove(c);
+            } else if (list.isAllowed(name, c.identity)) {
+                waiting.remove(c);
+                log("Aceptado por el anfitrión: " + name + " (" + c.identityLabel + ")");
+                if (!c.enter(name)) c.closeGracefully();
+            } else if (!AccessList.hasRequest(name, c.identity)) {
+                waiting.remove(c);
+                c.send(Protocol.msg("error").put("code", "rejected").put("msg", "El anfitrión no aceptó tu solicitud"
+                        + " esta vez. Las funciones locales siguen disponibles."));
+                c.closeGracefully();
+                log("Solicitud rechazada: " + name + " (" + c.identityLabel + ")");
+            } else if (now - c.waitingSince > WAIT_FOR_PERMISSION_SECONDS * 1000L) {
+                waiting.remove(c);
+                c.send(Protocol.msg("error").put("code", "pendingTimeout").put("msg", "El anfitrión todavía no responde."
+                        + " Tu solicitud queda guardada: si te acepta, la próxima vez entrarás directo."));
+                c.closeGracefully();
+            }
         }
     }
 
@@ -352,7 +422,8 @@ public class VsServer {
         connection.path = List.of();
         clients.put(id, connection);
 
-        connection.send(Protocol.msg("welcome").put("id", id).put("room", ROOM_NAME).put("map", LobbyMap.ID)
+        // "name": con el que entró de verdad (una cuenta aceptada entra con su nombre registrado).
+        connection.send(Protocol.msg("welcome").put("id", id).put("name", name).put("room", ROOM_NAME).put("map", LobbyMap.ID)
                 .put("w", Protocol.ROOM_WIDTH).put("h", Protocol.ROOM_HEIGHT));
         broadcast(Protocol.msg("joined").put("id", id).put("name", name));
         connection.send(snapshot());
@@ -367,6 +438,7 @@ public class VsServer {
     }
 
     synchronized void leave(ClientConnection connection) {
+        waiting.remove(connection); // se fue mientras esperaba permiso: su solicitud queda para el anfitrión
         if (connection.id <= 0 || clients.remove(connection.id) == null) return;
         battles.onLeave(connection);
         broadcast(Protocol.msg("left").put("id", connection.id).put("name", connection.name));

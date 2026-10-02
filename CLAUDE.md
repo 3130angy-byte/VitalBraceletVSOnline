@@ -174,6 +174,20 @@ usuario; recién después pasea), pasea según el modo (quieto/barra/libre,
 menú. Datos: `DigimonProgress` (Vital Values y Power Trophies de la VS DIM +
 récord de batallas con SALDO de Vital Values) y `DigimonAge` (edad del VB +
 días en el programa; sin muerte).
+**Ventanas (2026-10-02, pedido del usuario)**: el Digimon, su portal y su globo
+NO tienen botón en la barra de tareas y siguen a la vista (y clicables) con
+"Mostrar escritorio": `ui/DesktopLayer.attach(stage)` les pone como DUEÑO una
+ventana UTILITY invisible (1x1, fuera de pantalla). Probado en la PC del
+usuario con `Shell.Application.ToggleDesktop()`: la ventana sin dueño quedó
+minimizada, la con dueño siguió visible. Sala, Laboratorio y peleas siguen en
+la barra. Como el dueño queda abierto, `DesktopLayer` apaga la salida
+implícita de JavaFX y termina el programa él mismo cuando no queda ninguna otra
+ventana a la vista (misma regla de antes; probado). **Pantalla de inicio**: se
+oculta al cargar un Digimon o al abrir el Laboratorio (primero abre el
+Laboratorio, luego oculta el inicio: nunca hay un instante sin ventanas) y
+vuelve SOLO si el escritorio queda vacío: al cerrar el Laboratorio sin Digimon
+(`LabWindow.setOnClosing`, en onHiding) o al retirar al último (si el
+Laboratorio no está abierto). Antes volvía tras cada retiro.
 
 **Récord y retiro** (pedido del usuario): TODA batalla (aleatoria y Batalla
 Oficial, Libre u Original) suma/resta Vital Values según la ETAPA DEL RIVAL
@@ -832,6 +846,42 @@ la depuración; siguen existiendo en 0.0.2).
   (`sessionName`/`sessionHost`); el archivo solo los precarga. Probado con 2
   programas a la vez. 0.0.3.1 viene con servidor "100.x" (decisión del usuario):
   cada probador escribe la IP; si no es válida, el juego arranca igual.
+- **Acceso por CUENTA + PEDIR PERMISO (2026-10-02, pedido del usuario; reemplaza
+  "solo el nombre")**. Capa 1: el nombre se puede inventar, la cuenta de
+  Tailscale no. `server/TailscaleIdentity` le pregunta a Tailscale de la PC del
+  servidor `tailscale whois --json <ip>` (salida a archivo temporal, 5 s máx.,
+  caché 60 s por IP) → clave `ts:<UserProfile.ID>` y etiqueta "correo · equipo"
+  (sin perfil: `ts-equipo:<StableID>`). Desde ESTA PC (loopback o una IP propia,
+  también la de Tailscale) = `local` = siempre entra (es el anfitrión; ojo: nunca
+  publicar el puerto con "tailscale serve", llegarían como 127.0.0.1). Otra IP o
+  Tailscale sin respuesta = `ip:<dirección>` (débil, se avisa). Capa 2:
+  `AccessList` guarda `nombre<TAB>cuenta<TAB>etiqueta` (máx. 20); entra solo si
+  nombre Y cuenta coinciden. Si no, `AccessList.ask` deja una SOLICITUD en
+  `config\solicitudes-acceso.txt` (máx. 10, UNA por cuenta: pedir con otro nombre
+  la reemplaza; vencen a las 24 h; con advertencias: nombre de OTRA cuenta, nombre
+  del anfitrión, sin Tailscale, "ya estaba en tu lista" = línea vieja sin cuenta)
+  y el cliente recibe `accessPending` y ESPERA conectado (`VsServer.waiting`):
+  cada 2 s el servidor lo deja entrar si lo aceptaron, lo despide con
+  `code`="rejected" si borraron la solicitud, o con "pendingTimeout" a los 180 s
+  (la solicitud queda: si lo aceptan, la próxima vez entra directo). Cada
+  solicitud NUEVA cuenta para el bloqueo de IP (5 en 60 s = 10 min). Aceptar ata el
+  nombre a la cuenta (si el nombre ya existía, pasa a esta cuenta). Los archivos
+  los escriben el servidor (.exe = otro proceso) y el Laboratorio: candado de
+  archivo (`config\acceso.lock`) y reemplazo atómico (archivo .tmp + move). Consola
+  del servidor: `solicitudes`, `aceptar <n>`, `rechazar <n>`. Protocolo SIN cambio
+  de versión (clientes viejos solo no muestran "esperando"). Probado fuera de
+  pantalla (20 de 20): whois real de esta laptop, pedir/esperar, aceptar desde
+  OTRO proceso (entra sin reconectar), impostor con el mismo nombre (avisado y
+  rechazado), reingreso directo, retiro, local directo, lista vieja, 3 nombres de
+  una cuenta = 1 solicitud, bloqueo de IP. **La cuenta recuerda el nombre**
+  (pedido del usuario, pensando en el celular): una cuenta ya aceptada entra con
+  SU nombre registrado aunque escriba otro o ninguno (`AccessList.nameFor`; el
+  "welcome" trae `name` y la sala avisa "Entraste como X"); una cuenta = un
+  nombre (aceptar otro nombre de la misma cuenta reemplaza el viejo); sin cuenta
+  aceptada, el nombre vacío se rechaza ("Falta el nombre"). Probado (24 de 24).
+  SIN PROBAR: que `whois` muestre la
+  cuenta de un invitado que llega por un equipo COMPARTIDO desde otra red de
+  Tailscale (si no, queda como equipo o como IP).
 - **0.0.3.1 (probadores, sin asistente ni chat IA)**: MISMO código con
   `-Ddigimon.edicion=tester` (`Edition.ASSISTANT=false`): sin Ollama, sin
   página ASISTENTE, sin chat (el globo muestra textos fijos, p. ej. "¡Gané!

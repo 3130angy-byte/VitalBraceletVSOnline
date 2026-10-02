@@ -97,6 +97,7 @@ public class SpeechBubble {
         scene.setFill(Color.TRANSPARENT);
 
         bubbleStage = new Stage();
+        org.example.ui.DesktopLayer.attach(bubbleStage);
         bubbleStage.initStyle(StageStyle.TRANSPARENT);
         bubbleStage.setAlwaysOnTop(true);
         bubbleStage.setScene(scene);
