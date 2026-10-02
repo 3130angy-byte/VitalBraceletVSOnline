@@ -1,5 +1,6 @@
 package org.example.online.server;
 
+import org.example.online.AccessList;
 import org.example.online.LobbyMap;
 import org.example.online.Protocol;
 import org.json.JSONArray;
@@ -39,7 +40,7 @@ public class VsServer {
 
     private static final int TICKS_PER_SECOND = 20;
     private static final int SNAPSHOT_EVERY_TICKS = 2;       // 10 fotos por segundo
-    private static final double SPEED_UNITS_PER_SECOND = 160;
+    private static final double SPEED_UNITS_PER_SECOND = Protocol.WALK_SPEED;
     private static final String ROOM_NAME = "sala-1";
 
     static final int ROOM_FULL = -1;
@@ -111,6 +112,10 @@ public class VsServer {
 
     public void run() throws IOException {
         ticker.scheduleAtFixedRate(this::tick, 0, 1000 / TICKS_PER_SECOND, TimeUnit.MILLISECONDS);
+        // Lista de acceso: si el anfitrión retira a alguien, sale de la sala (se revisa cada 2 s).
+        AccessList.writeOnline(List.of());
+        java.nio.file.Files.deleteIfExists(emergencyFlag()); // una señal vieja no debe apagar este arranque
+        ticker.scheduleAtFixedRate(this::checkAccessList, 2, 2, TimeUnit.SECONDS);
         if (!embedded) startConsole();
         try (ServerSocket ss = new ServerSocket(port)) {
             serverSocket = ss;
@@ -128,6 +133,10 @@ public class VsServer {
                     throw e;
                 }
                 String ip = socket.getInetAddress().getHostAddress();
+                if (isBlocked(ip)) { // muchos nombres rechazados seguidos: bloqueada un rato
+                    socket.close();
+                    continue;
+                }
                 long fromSameIp = connections.stream().filter(c -> c.remoteIp().equals(ip)).count();
                 if (fromSameIp >= config.maxConnectionsPerIp) {
                     log("Rechazada conexión de " + ip + ": ya tiene " + fromSameIp + " abiertas.");
@@ -199,6 +208,94 @@ public class VsServer {
         }
     }
 
+    // ---------------------------------------------------------------- protecciones
+
+    /** Rechazos por IP (lista de acceso): 5 en 60 s = esa IP bloqueada 10 minutos (luego vuelve a poder). */
+    private static final int MAX_REJECTIONS = 5;
+    private static final long REJECTION_WINDOW_MS = 60_000, BLOCK_MS = 10 * 60_000;
+    private final Map<String, java.util.ArrayDeque<Long>> rejections = new ConcurrentHashMap<>();
+    private final Map<String, Long> blockedUntil = new ConcurrentHashMap<>();
+
+    void noteRejected(String ip) {
+        long now = System.currentTimeMillis();
+        java.util.ArrayDeque<Long> times = rejections.computeIfAbsent(ip, k -> new java.util.ArrayDeque<>());
+        synchronized (times) {
+            times.addLast(now);
+            while (!times.isEmpty() && now - times.peekFirst() > REJECTION_WINDOW_MS) times.pollFirst();
+            if (times.size() >= MAX_REJECTIONS) {
+                blockedUntil.put(ip, now + BLOCK_MS);
+                times.clear();
+                log("IP " + ip + " bloqueada 10 minutos: demasiados nombres rechazados seguidos.");
+            }
+        }
+    }
+
+    private boolean isBlocked(String ip) {
+        Long until = blockedUntil.get(ip);
+        if (until == null) return false;
+        if (System.currentTimeMillis() < until) return true;
+        blockedUntil.remove(ip);
+        return false;
+    }
+
+    /**
+     * BOTÓN DE EMERGENCIA del anfitrión (Laboratorio > ACCESO, 0.0.3.z): apaga el
+     * servidor de esta PC, sea el de dentro del programa o "Servidor VS Online.exe"
+     * (este lo ve por un archivo-señal que revisa cada 2 s). Avisa a todos y cierra
+     * las conexiones.
+     */
+    public static void requestEmergencyShutdown() {
+        try {
+            java.nio.file.Files.writeString(emergencyFlag(), "apagar");
+        } catch (IOException e) {
+            log("No se pudo dejar la señal de apagado: " + e.getMessage());
+        }
+        VsServer embedded;
+        synchronized (VsServer.class) {
+            embedded = embeddedInstance;
+        }
+        if (embedded != null) embedded.shutdown("El anfitrión apagó el servidor.");
+    }
+
+    private static java.nio.file.Path emergencyFlag() {
+        return org.example.chat.AppPaths.config().resolve("apagar-servidor.senal");
+    }
+
+    private volatile long accessListStamp = -1;
+
+    /** Relee la lista de acceso si cambió y saca de la sala a quien ya no está (retirado, no baneado). */
+    private void checkAccessList() {
+        if (java.nio.file.Files.exists(emergencyFlag())) { // botón de emergencia del anfitrión
+            try {
+                java.nio.file.Files.deleteIfExists(emergencyFlag());
+            } catch (IOException ignored) {
+            }
+            shutdown("El anfitrión apagó el servidor.");
+            return;
+        }
+        long stamp = AccessList.lastModified();
+        if (stamp == accessListStamp) return;
+        accessListStamp = stamp;
+        AccessList list = AccessList.load();
+        for (ClientConnection c : clients.values()) {
+            if (list.isAllowed(c.name)) continue;
+            c.send(Protocol.msg("error").put("code", "removed")
+                    .put("msg", "El anfitrión te retiró del servidor. Tus funciones locales siguen disponibles."));
+            c.closeGracefully();
+            log("Retirado por la lista de acceso: " + c.name + " (#" + c.id + ")");
+        }
+    }
+
+    /** Anota quiénes están en la sala (el Laboratorio del anfitrión lo muestra). */
+    private void publishOnline() {
+        AccessList.writeOnline(clients.values().stream().map(c -> c.name).toList());
+    }
+
+    /** ¿Hay un servidor corriendo dentro de este programa? */
+    public static synchronized boolean embeddedRunning() {
+        return embeddedInstance != null && !embeddedInstance.shuttingDown;
+    }
+
     /** Apagado ordenado: avisa, cierra conexiones y sale. Idempotente. */
     void shutdown(String reason) {
         if (shuttingDown) return;
@@ -209,12 +306,18 @@ public class VsServer {
             c.closeGracefully();
         }
         ticker.shutdownNow();
+        AccessList.writeOnline(List.of());
         try {
             ServerSocket ss = serverSocket;
             if (ss != null) ss.close();
         } catch (IOException ignored) {
         }
-        if (embedded) return; // dentro del V-Pet: nunca cerrar el programa entero
+        if (embedded) { // dentro del V-Pet: nunca cerrar el programa entero; se puede volver a encender
+            synchronized (VsServer.class) {
+                if (embeddedInstance == this) embeddedInstance = null;
+            }
+            return;
+        }
         // Da un instante a que salgan los avisos y termina el proceso.
         Thread exit = new Thread(() -> {
             try {
@@ -259,6 +362,7 @@ public class VsServer {
             if (other != connection && d != null) connection.send(d);
         }
         log(name + " (#" + id + ") entró. Jugadores: " + clients.size());
+        publishOnline();
         return id;
     }
 
@@ -267,6 +371,7 @@ public class VsServer {
         battles.onLeave(connection);
         broadcast(Protocol.msg("left").put("id", connection.id).put("name", connection.name));
         log(connection.name + " (#" + connection.id + ") salió. Jugadores: " + clients.size());
+        publishOnline();
     }
 
     /**
@@ -289,6 +394,27 @@ public class VsServer {
                 s.getInt("small"), s.getInt("big"), s.getInt("activity")};
         from.stage = validated.getInt("stage");
         from.powerTrophies = validated.getInt("powerTrophies");
+
+        // Compañero (puesto 2), solo para el 2 vs 2: se reparten sus cuadros, nunca sus stats.
+        JSONObject p = validated.optJSONObject("partner");
+        if (p != null) {
+            String pSpecies = Protocol.cleanText(p.optString("species"), Protocol.MAX_NAME_LENGTH);
+            message.put("partner", new JSONObject()
+                    .put("species", pSpecies.isEmpty() ? "Digimon" : pSpecies)
+                    .put("attribute", p.getInt("attribute"))
+                    .put("stage", p.getInt("stage"))
+                    .put("rank", config.rankFor(p.getInt("powerTrophies")))
+                    .put("frames", p.getJSONArray("frames"))
+                    .put("nameSprite", p.getJSONObject("nameSprite")));
+            JSONObject ps = p.getJSONObject("stats");
+            from.partnerStats = new int[]{ps.getInt("dp"), ps.getInt("hp"), ps.getInt("ap"),
+                    ps.getInt("small"), ps.getInt("big"), ps.getInt("activity")};
+            from.partnerStage = p.getInt("stage");
+            from.partnerPowerTrophies = p.getInt("powerTrophies");
+            from.partnerAttribute = p.getInt("attribute");
+        } else {
+            from.partnerStats = null;
+        }
         from.digimon = message;
         broadcast(message);
         log(from.name + " (#" + from.id + ") trajo a " + message.getString("species")

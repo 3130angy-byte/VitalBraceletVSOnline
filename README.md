@@ -13,9 +13,12 @@ entra a una sala en línea para enfrentarse a los Digimon de otros jugadores.
 2. Descomprime y abre `DigimonVS-0.0.3.1\DigimonVS-0.0.3.1.exe`.
    Si Windows avisa *"Windows protegió su PC"*: **Más información → Ejecutar de todas formas**
    (el programa no tiene firma digital).
-3. Escribe tu nombre de usuario.
+3. Escribe tu nombre de usuario y, en *Servidor*, la IP que te pase el anfitrión
+   (viene escrito `100.x` como ejemplo). Si no tienes una, deja cualquier cosa:
+   el juego arranca igual con todas las funciones locales.
 4. **Cargar mi Digimon (VS DIM)**: elige el `.bin` de tu Digimon, sacado del
    Vital Bracelet con tu lector de tarjetas. **Guarda antes una copia de ese archivo.**
+   La especie se lee sola del sprite del nombre (sin IA); puedes corregirla.
 
 ## Qué se puede hacer
 
@@ -24,34 +27,47 @@ entra a una sala en línea para enfrentarse a los Digimon de otros jugadores.
 - **Ficha del Digimon**: stats, atributo, rango C/B/A/S según sus trofeos
   (10 / 30 / 70 / 120) y el bono que le suman.
 - **Batalla aleatoria**: la VS DIM solo trae a tu Digimon, así que los rivales
-  salen de **DIM cards normales** (`.bin`) que tengas en tu PC. La primera vez
-  que elijas *Batalla → Aleatoria* el programa te pide la carpeta donde están.
-  Tu Digimon debe ser Child o superior.
+  salen de **DIM cards normales** (`.bin`) que tengas en tu PC. Agrégalas en
+  *Laboratorio → RIVALES* (una carpeta o archivos sueltos). Tu Digimon debe ser
+  Child o superior.
+- **ARENA 2 vs 2** (inspirada en la app Vital Bracelet Arena, con reglas y arte
+  propios): tus dos Digimon (puesto 1 y 2) contra la máquina o contra otro
+  jugador en línea. *ATTACK* = toca los números en orden durante 10 s (el combo
+  sube tu ataque; con 10+ sale el BIG ATTACK); al ser atacado eliges *DEFENSE*
+  (detén la barra en el escudo) o *PROTECT* (tu compañero recibe el golpe);
+  *W-ATTACK* con el medidor lleno; *GUTS* a veces te salva con 1 HP. Los stats
+  se convierten como la app (DP×120 = BP, HP×400, AP×150). No cuenta para el
+  récord del VB.
+- **Laboratorio**: tus Digimon guardados como cápsulas (copias de tus VS DIM),
+  Digidex de especies vistas, historial de batallas y rivales. Puedes tener 2
+  Digimon en el escritorio y cambiarlos sin retirarlos.
 - **VS Online**: sala con tu avatar y tu Digimon siguiéndote. En el NPC
   *Batalla oficial* te pones disponible y retas a otros jugadores
   (15 s para aceptar). El servidor calcula la pelea una sola vez y ambos ven
   el mismo resultado.
   - **Batalla Libre**: stats + bono por trofeos (cada 10 = +50% DP, +25% HP, +1 AP; tope 120).
   - **Batalla Original**: solo los stats de la DIM.
-- **Retirar**: el programa lleva la cuenta de Vital Values de cada batalla
-  según la etapa del rival y, al retirar al Digimon, crea una VS DIM nueva
-  para devolverlo al Vital Bracelet (la original no se toca).
-
-⚠️ **Limitación conocida**: el Vital Bracelet acepta la VS DIM devuelta, pero
-**todavía no toma el resultado**: el Digimon vuelve sin la recompensa ni el
-castigo de sus batallas, como si no hubiera peleado. Se está investigando.
+- **Retirar**: al retirar al Digimon se crea una VS DIM con el **reporte de
+  batalla** (el mismo formato que escribe un VB al pelear contra una tarjeta):
+  al devolverla, el Vital Bracelet entrega él mismo la recompensa o el castigo
+  (probado en un VB real). La VS DIM original no se toca.
 
 ## Servidor del VS Online
 
-El descargable público **no trae conexión a ningún servidor**: se está
-trabajando en uno seguro y con más capacidad. Si quieres probar la sala en
-línea, **pide permiso** al autor para recibir el archivo de prueba, indicando
-el nombre de usuario con el que entrarás.
+El descargable **no trae ningún servidor puesto**. Los servidores tienen una
+**lista de acceso**: solo entran los nombres que el anfitrión agregó (máx. 20).
+Si quieres probar la sala del autor, **pide permiso** indicando el nombre de
+usuario con el que entrarás; te pasará la IP para escribirla al iniciar. Si tu
+nombre no está en la lista, la sala te avisa y sigues con las funciones locales.
 
 Para montar tu propio servidor desde el código: `.\gradlew.bat runServer`
 (consola con `jugadores`, `expulsar <nombre>`, `apagar`, `ayuda`; puerto 7777).
 Los jugadores se conectan con la IP de tu PC, por ejemplo a través de
-[Tailscale](https://tailscale.com/). Ajustes del servidor y recompensas:
+[Tailscale](https://tailscale.com/). La lista de acceso es el archivo
+`DigimonProjectDatanfigista-acceso.txt` (una persona por línea;
+`anfitrion=TuNombre` para ti); el servidor la relee sola y saca de la sala a
+quien retires. Una conexión que no se identifica en 10 s se corta y una IP con
+muchos nombres rechazados queda bloqueada 10 minutos. Ajustes del servidor y recompensas:
 archivos `.properties` en `DigimonProjectData\config` (en `D:\` si existe; si
 no, en tu carpeta de usuario).
 
@@ -77,10 +93,7 @@ Requiere JDK 17 (Gradle lo descarga con el wrapper).
 .\gradlew.bat packageTester   # arma el paquete con Java incluido (jpackage)
 ```
 
-`packageTester` usa como servidor por defecto la propiedad
-`servidorProbadores` (en `~/.gradle/gradle.properties` o `-PservidorProbadores=100.x.x.x`).
-
-El mismo código incluye la edición **0.0.3** (`.\gradlew.bat run`): un
+El mismo código incluye la edición con **asistente** (`.\gradlew.bat run`): un
 asistente virtual con chat de IA local vía [Ollama](https://ollama.com/)
 (modelo `ministral-3:3b`). La versión 0.0.3.1 lo desactiva con
 `-Ddigimon.edicion=tester`.

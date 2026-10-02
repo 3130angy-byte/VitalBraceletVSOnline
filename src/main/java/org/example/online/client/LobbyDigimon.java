@@ -2,9 +2,6 @@ package org.example.online.client;
 
 import com.github.cfogrady.vb.dim.sprite.SpriteData;
 import javafx.scene.image.Image;
-import javafx.scene.image.PixelReader;
-import javafx.scene.image.PixelWriter;
-import javafx.scene.image.WritableImage;
 
 import org.example.dim.DimSpriteImageFactory;
 import org.example.dim.VsDimData;
@@ -26,44 +23,53 @@ import java.util.List;
  * malicioso al decodificador de imágenes de los demás.
  *
  * Tamaño: los sprites DIM (hasta 64x56) son enormes frente al avatar de
- * 16x24 en casillas de 16; se dibujan a la MITAD, reducidos promediando
- * cada bloque de 2x2 (mantiene la forma mejor que saltarse píxeles).
+ * 16x24 en casillas de 16: en el MUNDO miden la mitad, pero la cámara de la
+ * sala acerca x2, así que en pantalla se ven con sus píxeles originales 1:1.
  *
- * Seguimiento: una "correa" corta -- el Digimon avanza hacia el avatar
- * hasta quedar a FOLLOW_DISTANCE. Es solo visual y lo calcula cada cliente
- * con las posiciones que ya manda el servidor (sin tráfico extra).
+ * Seguimiento: recorre el mismo camino del avatar (ver follow). Es solo
+ * visual y lo calcula cada cliente con las posiciones que ya manda el
+ * servidor (sin tráfico extra).
  */
 public final class LobbyDigimon {
 
-    /** El Digimon (hasta 32 de ancho a la mitad) queda al lado del avatar sin encimarse. */
-    private static final double FOLLOW_DISTANCE = 24;
-    private static final double FOLLOW_EASE = 0.18;
-    private static final long WALK_STEP_NANOS = 180_000_000L;
+    /** Distancia DE CAMINO detrás del avatar (el Digimon mide hasta 32 de ancho en el mundo). */
+    private static final double FOLLOW_DISTANCE = 26;
+    /** Velocidad normal = la del avatar en el servidor; si se queda atrás, un poco más. */
+    private static final double FOLLOW_SPEED = Protocol.WALK_SPEED;
+    private static final double CATCH_UP_SPEED = Protocol.WALK_SPEED * 1.35;
+    private static final double CRUMB_SPACING = 3;
+    private static final double SNAP_DISTANCE = 140;
+    private static final long WALK_STEP_NANOS = 220_000_000L;
     private static final long IDLE_STEP_NANOS = 600_000_000L;
+
+    /** "Migas" del camino del avatar que el Digimon todavía no recorre. */
+    private final java.util.ArrayDeque<double[]> trail = new java.util.ArrayDeque<>();
 
     final String species;
     final String rank;
     final int attribute;
     /** Etapa cruda de la DIM (2 Child .. 5 Ultimate): fija los Vital Values que da o quita una batalla. */
     final int stage;
-    /** 0 IDLE_1, 1 IDLE_2, 2 WALK_1, 3 WALK_2 -- ya reducidos a la mitad (para la sala). */
-    final Image[] frames;
     /** Protocol.FRAME_* a tamaño COMPLETO (para el coliseo de las Batallas Oficiales). */
     final Image[] fullFrames;
     /** Sprite NAME en su tamaño nativo (pantallas del coliseo). */
     final Image nameImage;
+    /** Huella de su aspecto (especie + cuadros): si cambia, el jugador cambió de Digimon y la sala lo anima con un portal. */
+    final int look;
+    /** Compañero del equipo (puesto 2), solo para el 2 vs 2; null si no trajo. No camina en la sala. */
+    LobbyDigimon partner;
 
     double x = Double.NaN, y = Double.NaN;
     /** Los sprites DIM miran a la izquierda; a la derecha se espejan (convención del proyecto). */
     boolean facingRight = false;
     int frame = 0;
 
-    private LobbyDigimon(String species, String rank, int attribute, int stage, Image[] frames, Image[] fullFrames, Image nameImage) {
+    private LobbyDigimon(String species, String rank, int attribute, int stage, Image[] fullFrames, Image nameImage, int look) {
+        this.look = look;
         this.species = species;
         this.rank = rank;
         this.attribute = attribute;
         this.stage = stage;
-        this.frames = frames;
         this.fullFrames = fullFrames;
         this.nameImage = nameImage;
     }
@@ -96,6 +102,22 @@ public final class LobbyDigimon {
                         .put("small", c.smallAttackId()).put("big", c.bigAttackId()).put("activity", c.activityType()));
     }
 
+    /**
+     * Mensaje "digimon" con TU EQUIPO: el puesto 1 (el que te sigue y pelea
+     * las batallas tipo VB) y, si hay, el puesto 2 como "partner" (solo para
+     * el 2 vs 2). Se reenvía cuando cambias el equipo en la PC.
+     */
+    public static JSONObject teamPayload(VsDimData primary, String primarySpecies,
+                                         VsDimData secondary, String secondarySpecies) {
+        JSONObject message = payloadFrom(primary, primarySpecies);
+        if (secondary != null) {
+            JSONObject partner = payloadFrom(secondary, secondarySpecies);
+            partner.remove("t");
+            message.put("partner", partner);
+        }
+        return message;
+    }
+
     private static JSONObject pixels(SpriteData.Sprite s) {
         return new JSONObject().put("w", s.getWidth()).put("h", s.getHeight())
                 .put("px", Base64.getEncoder().encodeToString(s.getPixelData()));
@@ -112,12 +134,14 @@ public final class LobbyDigimon {
             SpriteData.Sprite sprite = decode(arr.getJSONObject(i), Protocol.MAX_FRAME_WIDTH, Protocol.MAX_FRAME_HEIGHT);
             full[i] = DimSpriteImageFactory.toImage(sprite, sprite.getWidth(), sprite.getHeight());
         }
-        Image[] lobby = new Image[4]; // IDLE_1, IDLE_2, WALK_1, WALK_2 a la mitad
-        for (int i = 0; i < lobby.length; i++) lobby[i] = halfSize(full[i]);
         SpriteData.Sprite name = decode(m.getJSONObject("nameSprite"),
                 Protocol.MAX_NAME_SPRITE_WIDTH, Protocol.MAX_NAME_SPRITE_HEIGHT);
-        return new LobbyDigimon(m.optString("species", "Digimon"), m.optString("rank", "-"),
-                m.optInt("attribute", 0), m.optInt("stage", 2), lobby, full, DimSpriteImageFactory.toNativeImage(name));
+        LobbyDigimon d = new LobbyDigimon(m.optString("species", "Digimon"), m.optString("rank", "-"),
+                m.optInt("attribute", 0), m.optInt("stage", 2), full, DimSpriteImageFactory.toNativeImage(name),
+                (m.optString("species", "") + arr).hashCode());
+        JSONObject p = m.optJSONObject("partner");
+        if (p != null) d.partner = fromMessage(p);
+        return d;
     }
 
     /** Píxeles RGB565 crudos -> sprite, revisando tamaño y largo (el servidor ya lo validó; aquí, otra vez). */
@@ -127,30 +151,6 @@ public final class LobbyDigimon {
         byte[] px = Base64.getDecoder().decode(f.getString("px"));
         if (px.length != w * h * 2) throw new IllegalArgumentException("sprite incompleto");
         return SpriteData.Sprite.builder().width(w).height(h).pixelData(px).build();
-    }
-
-    /** Reduce a la mitad promediando cada bloque 2x2; transparente si el bloque es mayormente vacío. */
-    private static Image halfSize(Image src) {
-        int w = (int) src.getWidth() / 2, h = (int) src.getHeight() / 2;
-        WritableImage out = new WritableImage(Math.max(1, w), Math.max(1, h));
-        PixelReader r = src.getPixelReader();
-        PixelWriter pw = out.getPixelWriter();
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                int opaque = 0, rs = 0, gs = 0, bs = 0;
-                for (int dy = 0; dy < 2; dy++)
-                    for (int dx = 0; dx < 2; dx++) {
-                        int argb = r.getArgb(x * 2 + dx, y * 2 + dy);
-                        if ((argb >>> 24) == 0) continue;
-                        opaque++;
-                        rs += (argb >> 16) & 0xFF;
-                        gs += (argb >> 8) & 0xFF;
-                        bs += argb & 0xFF;
-                    }
-                pw.setArgb(x, y, opaque < 2 ? 0 : (0xFF << 24) | ((rs / opaque) << 16) | ((gs / opaque) << 8) | (bs / opaque));
-            }
-        }
-        return out;
     }
 
     /** El servidor manda "-" cuando no llega al rango C (menos de 10 puntos). */
@@ -165,30 +165,88 @@ public final class LobbyDigimon {
 
     // ---------------------------------------------------------------- seguir y animar
 
-    /** Avanza hacia el avatar (en sus pies) y elige el cuadro. */
-    void follow(double avatarX, double avatarY, long now) {
-        if (Double.isNaN(x)) {
+    /**
+     * Sigue al avatar POR SU MISMO CAMINO (como los compañeros de los juegos
+     * de Pokémon): el avatar va dejando "migas" y el Digimon las recorre en
+     * orden, a velocidad constante, hasta quedar a FOLLOW_DISTANCE de camino
+     * detrás. Así no corta esquinas ni atraviesa muros, y no tiene el tirón
+     * de "látigo" del seguimiento anterior (acercarse un % por cuadro).
+     *
+     * @param dt segundos desde el cuadro anterior (el movimiento no depende de los FPS)
+     */
+    void follow(double avatarX, double avatarY, long now, double dt) {
+        if (Double.isNaN(x) || Math.hypot(avatarX - x, avatarY - y) > SNAP_DISTANCE) {
+            // Recién llegado, o el avatar "saltó" (p. ej. entró a la sala): aparece detrás.
             x = avatarX - FOLLOW_DISTANCE;
             y = avatarY;
+            trail.clear();
         }
-        double dx = avatarX - x, dy = avatarY - y;
-        double dist = Math.hypot(dx, dy);
-        double stepX = 0, stepY = 0;
-        if (dist > FOLLOW_DISTANCE) {
-            double move = (dist - FOLLOW_DISTANCE) * FOLLOW_EASE;
-            stepX = dx / dist * move;
-            stepY = dy / dist * move;
-            x += stepX;
-            y += stepY;
+        double[] last = trail.isEmpty() ? null : trail.peekLast();
+        if (last == null || Math.hypot(avatarX - last[0], avatarY - last[1]) >= CRUMB_SPACING) {
+            trail.addLast(new double[]{avatarX, avatarY});
         }
-        boolean moving = Math.hypot(stepX, stepY) > 0.1;
-        if (Math.abs(stepX) > 0.05) facingRight = stepX > 0;
+
+        // Largo del camino que falta hasta el avatar.
+        double remaining = 0, px = x, py = y;
+        for (double[] c : trail) {
+            remaining += Math.hypot(c[0] - px, c[1] - py);
+            px = c[0];
+            py = c[1];
+        }
+        remaining += Math.hypot(avatarX - px, avatarY - py);
+
+        double movedX = 0;
+        double moved = 0;
+        if (remaining > FOLLOW_DISTANCE) {
+            // Si se quedó muy atrás, apura un poco el paso (nunca teletransportándose).
+            double speed = remaining > FOLLOW_DISTANCE * 2.5 ? CATCH_UP_SPEED : FOLLOW_SPEED;
+            double budget = Math.min(speed * dt, remaining - FOLLOW_DISTANCE);
+            while (budget > 0 && !trail.isEmpty()) {
+                double[] c = trail.peekFirst();
+                double d = Math.hypot(c[0] - x, c[1] - y);
+                if (d <= budget) {
+                    movedX += c[0] - x;
+                    x = c[0];
+                    y = c[1];
+                    budget -= d;
+                    moved += d;
+                    trail.pollFirst();
+                } else {
+                    double fx = (c[0] - x) / d * budget, fy = (c[1] - y) / d * budget;
+                    x += fx;
+                    y += fy;
+                    movedX += fx;
+                    moved += budget;
+                    budget = 0;
+                }
+            }
+        }
+        boolean moving = moved > 0.05;
+        if (Math.abs(movedX) > 0.05) facingRight = movedX > 0;
         frame = moving
                 ? 2 + (int) ((now / WALK_STEP_NANOS) % 2)
                 : (int) ((now / IDLE_STEP_NANOS) % 2);
     }
 
+    /** Mismo Digimon con datos nuevos (p. ej. solo cambió el compañero): sigue donde estaba, sin saltar. */
+    void takePlaceOf(LobbyDigimon old) {
+        x = old.x;
+        y = old.y;
+        facingRight = old.facingRight;
+        frame = old.frame;
+        trail.addAll(old.trail);
+    }
+
+    /** Lo deja quieto en un punto (al salir del portal) y vuelve a seguir al avatar desde ahí. */
+    void placeAt(double x, double y, boolean facingRight) {
+        this.x = x;
+        this.y = y;
+        this.facingRight = facingRight;
+        trail.clear();
+    }
+
+    /** Cuadro actual a tamaño COMPLETO (la sala lo dibuja a la mitad del mundo = píxeles 1:1 en pantalla). */
     Image currentFrame() {
-        return frames[frame];
+        return fullFrames[frame];
     }
 }

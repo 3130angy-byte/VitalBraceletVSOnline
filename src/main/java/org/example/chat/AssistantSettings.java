@@ -63,6 +63,7 @@ public final class AssistantSettings {
 
     /** Servidor del VS Online: 127.0.0.1 si corre en esta PC, o la IP de Tailscale (100.x.x.x) del anfitrión. */
     public static String onlineHost() {
+        if (sessionHost != null) return sessionHost;
         String configured = load().getProperty(ONLINE_HOST, "").trim();
         return configured.isEmpty() ? DEFAULT_ONLINE_HOST : configured;
     }
@@ -77,6 +78,7 @@ public final class AssistantSettings {
 
     /** Nombre del jugador en la sala (hasta que existan las cuentas). Por defecto, el usuario de Windows. */
     public static String playerName() {
+        if (sessionName != null) return sessionName;
         String configured = load().getProperty(PLAYER_NAME, "").trim();
         return configured.isEmpty() ? System.getProperty("user.name", "Jugador") : configured;
     }
@@ -84,8 +86,18 @@ public final class AssistantSettings {
     /** Nombre escrito en la pantalla de inicio la vez anterior; vacío si nunca se escribió. */
     public static String savedPlayerName() { return load().getProperty(PLAYER_NAME, "").trim(); }
 
+    /**
+     * Nombre y servidor escritos en la pantalla de inicio de ESTE programa (en memoria).
+     * Bug real (2026-10-02): con dos programas abiertos en la misma PC, el archivo de
+     * ajustes es uno solo y la sala leía el nombre que había guardado el OTRO programa.
+     * Ahora cada programa usa el suyo; el archivo solo sirve para precargarlos la próxima vez.
+     */
+    private static volatile String sessionName, sessionHost;
+
     /** Guarda el nombre de usuario y el servidor de la pantalla de inicio sin tocar los demás ajustes. */
     public static void saveStartScreen(String name, String host) {
+        if (name != null && !name.isBlank()) sessionName = name.trim();
+        if (host != null && !host.isBlank()) sessionHost = host.trim();
         Properties p = load();
         p.setProperty(PLAYER_NAME, name == null ? "" : name.trim());
         if (host != null) p.setProperty(ONLINE_HOST, host.trim());

@@ -25,6 +25,8 @@ public final class AppPaths {
     public static Path config() { return ensure(BASE.resolve("config")); }
     /** VS DIM de vuelta al Vital Bracelet (al retirar un Digimon). */
     public static Path returns() { return ensure(BASE.resolve("devoluciones")); }
+    /** Laboratorio: cápsulas (copias de VS DIM), Digidex e historial de batallas. */
+    public static Path lab() { return ensure(BASE.resolve("laboratorio")); }
 
     private static Path ensure(Path path) {
         try {

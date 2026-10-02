@@ -26,7 +26,8 @@ public class StartScreen {
      * @param savedHost   servidor guardado (o el de la edición)
      * @param onLoadVsDim recibe nombre y servidor ya validados y sigue con la carga de la VS DIM
      */
-    public static Scene build(String savedName, String savedHost, BiConsumer<String, String> onLoadVsDim) {
+    public static Scene build(String savedName, String savedHost, BiConsumer<String, String> onLoadVsDim,
+                              Runnable onOpenLab) {
         Label title = new Label("V-PET");
         title.setStyle("-fx-font-size: 28px; -fx-text-fill: white; -fx-font-weight: bold;");
         Label version = new Label("versión " + Edition.VERSION + (Edition.ASSISTANT ? "" : " (prueba del VS Online)"));
@@ -78,10 +79,24 @@ public class StartScreen {
         nameField.setOnAction(e -> go.run());
         hostField.setOnAction(e -> go.run());
 
-        VBox box = new VBox(8, title, version, nameLabel, nameField, hostLabel, hostField, error, subtitle, btnVsDim);
+        // El Laboratorio se abre aunque no haya ningún Digimon en el escritorio.
+        Button btnLab = new Button("LABORATORIO");
+        btnLab.setOnAction(e -> {
+            // Si ya escribió su nombre, vale para ESTE programa aunque entre por el Laboratorio
+            // (antes la sala usaba el nombre guardado por otro programa abierto en la misma PC).
+            String name = Protocol.cleanText(nameField.getText(), Protocol.MAX_NAME_LENGTH);
+            String host = hostField.getText().trim();
+            if (!name.isEmpty()) {
+                org.example.chat.AssistantSettings.saveStartScreen(name,
+                        host.matches("[A-Za-z0-9.:\\-]{1,64}") ? host : null);
+            }
+            onOpenLab.run();
+        });
+
+        VBox box = new VBox(8, title, version, nameLabel, nameField, hostLabel, hostField, error, subtitle, btnVsDim, btnLab);
         box.setAlignment(Pos.CENTER);
         box.setStyle("-fx-background-color: #202030;");
 
-        return new Scene(box, 400, 360);
+        return new Scene(box, 400, 400);
     }
 }

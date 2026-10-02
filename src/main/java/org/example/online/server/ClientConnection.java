@@ -1,5 +1,6 @@
 package org.example.online.server;
 
+import org.example.online.AccessList;
 import org.example.online.LobbyMap;
 import org.example.online.Protocol;
 import org.json.JSONArray;
@@ -47,6 +48,8 @@ class ClientConnection implements Runnable {
     private final RateLimiter moveLimiter;
     /** Un reto cada 3 s como máximo: evita bombardear a otros con solicitudes. */
     private final RateLimiter challengeLimiter = new RateLimiter(1.0 / 3, 1);
+    /** Cambiar el equipo desde la PC: uno cada 5 s como máximo. */
+    private final RateLimiter teamLimiter = new RateLimiter(1.0 / 5, 2);
     private volatile boolean closed = false;
 
     // Estado del jugador. Lo escribe este hilo (camino) y el tick (posición).
@@ -64,6 +67,11 @@ class ClientConnection implements Runnable {
     volatile int[] stats;
     volatile int stage;
     volatile int powerTrophies;
+    /** Compañero (puesto 2) para el 2 vs 2: mismo formato; null si no trajo. */
+    volatile int[] partnerStats;
+    volatile int partnerStage;
+    volatile int partnerPowerTrophies;
+    volatile int partnerAttribute;
     /** Batallas Oficiales: disponible para que lo reten, y si está peleando ahora. */
     volatile boolean available;
     volatile boolean inBattle;
@@ -74,8 +82,12 @@ class ClientConnection implements Runnable {
         this.out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
         this.chatLimiter = new RateLimiter(config.chatPerSecond, config.chatBurst);
         this.moveLimiter = new RateLimiter(config.movesPerSecond, config.movesPerSecond);
-        socket.setSoTimeout(Protocol.IDLE_TIMEOUT_SECONDS * 1000);
+        // Un desconocido tiene pocos segundos para presentarse (hello); después, la inactividad normal.
+        socket.setSoTimeout(HELLO_TIMEOUT_SECONDS * 1000);
     }
+
+    /** Segundos para mandar el "hello" antes de que se corte la conexión. */
+    static final int HELLO_TIMEOUT_SECONDS = 10;
 
     String remoteIp() {
         return socket.getInetAddress().getHostAddress();
@@ -129,8 +141,21 @@ class ClientConnection implements Runnable {
             if (m.optInt("v", -1) != Protocol.VERSION) return fail("Versión de protocolo distinta a la del servidor.");
             String cleanName = Protocol.cleanText(m.optString("name"), Protocol.MAX_NAME_LENGTH);
             if (cleanName.isEmpty()) return fail("Falta el nombre.");
+            // Lista de acceso del anfitrión (0.0.3.z): si no estás, solo quedan las funciones locales.
+            if (!AccessList.load().isAllowed(cleanName)) {
+                VsServer.log("Rechazado (no está en la lista de acceso): " + cleanName + " desde " + remoteIp());
+                server.noteRejected(remoteIp());
+                send(Protocol.msg("error").put("code", "notAllowed").put("msg", "Tu nombre (" + cleanName
+                        + ") no está en la lista del anfitrión: no puedes entrar a la sala. Las funciones locales"
+                        + " (Batalla aleatoria, ARENA local, Laboratorio) siguen disponibles."));
+                return false;
+            }
             int joined = server.join(this, cleanName);
             if (joined == VsServer.ROOM_FULL) return fail("La sala está llena.");
+            try {
+                socket.setSoTimeout(Protocol.IDLE_TIMEOUT_SECONDS * 1000); // ya se presentó: inactividad normal
+            } catch (java.net.SocketException ignored) {
+            }
             return true;
         }
 
@@ -156,8 +181,23 @@ class ClientConnection implements Runnable {
                 if (!text.isEmpty()) server.chat(this, text);
             }
             case "digimon" -> {
-                if (digimon != null) return true; // una sola vez por conexión
+                // Se puede volver a mandar (cambio de equipo en la PC), pero nunca en medio de un reto o pelea.
+                if (digimon != null) {
+                    if (server.battles().isBusy(this)) {
+                        send(Protocol.msg("teamRejected").put("reason", "No puedes cambiar tu equipo durante un reto o una pelea."));
+                        return true;
+                    }
+                    if (!teamLimiter.tryAcquire()) {
+                        send(Protocol.msg("teamRejected").put("reason", "Espera un momento antes de volver a cambiar tu equipo."));
+                        return true;
+                    }
+                }
                 String problem = validateDigimon(m);
+                if (problem == null && m.has("partner")) {
+                    JSONObject partner = m.optJSONObject("partner");
+                    problem = partner == null ? "compañero inválido." : validateDigimon(partner);
+                    if (problem != null) problem = "compañero: " + problem;
+                }
                 if (problem != null) return fail("Digimon rechazado: " + problem);
                 server.digimonArrived(this, m);
             }
@@ -172,6 +212,10 @@ class ClientConnection implements Runnable {
             }
             case "challengeReply" -> server.battles().reply(this, m.optInt("from", -1), m.optBoolean("accept", false));
             case "battleDone" -> server.battles().battleDone(this);
+            // ARENA 2 vs 2 online: la partida ignora todo lo que no corresponda a su turno y fase.
+            case "arenaAction" -> server.battles().arenaAction(this, m.optString("action", "attack"));
+            case "arenaCombo" -> server.battles().arenaCombo(this, m.optInt("combo", 0));
+            case "arenaDefense" -> server.battles().arenaDefense(this, m.optDouble("distance", 1.0), m.optBoolean("protect", false));
             case "ping" -> { /* basta con haber llegado: reinicia la espera de inactividad */ }
             default -> { /* tipo desconocido: se ignora, sin cortar (compatibilidad futura) */ }
         }

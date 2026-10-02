@@ -106,9 +106,45 @@ org.example
   (`VsDimWriter`): el checksum se guarda con NOT como todo lo demás
   (confirmado en 5 archivos); escribir MagnaKidmon con 5985 VV da un archivo
   IDÉNTICO byte a byte al "Battle step" que produjo el VB. Se niega a partir
-  de un archivo con checksum inválido: "Resultado del VS.bin" lo tiene
-  inválido (editado, no salió tal cual del VB; sus [0]=2 [4]=3 [5]=1 no son
-  prueba de nada).
+  de un archivo cuyo checksum no cumple esa fórmula.
+  **Reporte de batalla (descubierto 2026-09-28)**: según el PDF del mod
+  (secc. 27 "VS DIM" y "Global Connect"), el resultado NO lo escribe tu VB
+  ni tu programa: el Digimon Link del RIVAL lee tu VS DIM, pelea y escribe el
+  resultado en la tarjeta; tu VB lo lee al reinsertarla y aplica él mismo
+  recompensa/castigo. Par real antes/después (01/09, 12 min de diferencia,
+  mismos flags `a234a404`): "VS DIM Monster Island - Hedorah.bin" →
+  "Resultado del VS.bin". Cambiaron SOLO 5 palabras: [0] 0→2, [4] 0→3,
+  [5] 0→1, [6] 100→0, y el checksum 53127→4800. **Los Vital Values NO
+  cambian** (4684 en ambos). El checksum del reporte es OTRA fórmula: suma
+  de 16 bits SOLO de las palabras del bloque de estado 0x40000
+  (2+4684+100+10+3+1 = 4800), no del rango completo — por eso antes parecía
+  "inválido". Origen confirmado por el usuario: un amigo le pasó la VS DIM
+  de Hedorah, el usuario la metió en SU VB (flags `ba993504` = su aparato;
+  los flags `a234a404` son del aparato del amigo), pelearon, **GANÓ HEDORAH**
+  (el Digimon de la tarjeta) y perdió el del usuario; el backup posterior es
+  "Resultado del VS". O sea: el VB que pelea CONTRA la tarjeta escribe el
+  reporte. **Formato DESCIFRADO (2026-09-28)** con 3 reportes reales contra
+  el mismo Hedorah (Perfect, etapa 4): "Resultado del VS" (sept.), "...VS 2
+  - Ganó Hedorah" y "...VS 3 - Ganó MagnaKidmon" (MagnaKidmon = Ultimate,
+  etapa 5; ambas peleas de 2 rondas):
+    [0] = 2 siempre → "hay reporte de batalla" (0 = VS DIM sin pelear)
+    [4] = dato del Digimon que peleó contra la tarjeta, SIN CONFIRMAR cuál.
+          5 con MagnaKidmon (etapa 5 Y secondPoolBattleChance 5: ambos
+          encajan); 3 en sept. contra otro Digimon que el usuario cree
+          Perfect (etapa 4) de una DIM vieja que luego corrigió (quizá
+          figuraba como 3). Prueba que lo decide: Hedorah contra Dynasmon
+          (etapa 5, secondPool 8). NO son rondas (2 rondas en ambas peleas).
+    [5] = 1 si GANÓ el Digimon de la tarjeta, 0 si perdió (confirmado)
+    [6] = se pone en 0
+    checksum 0x120000 = suma de 16 bits SOLO del bloque de estado
+          (0x40000..0x40FFF, ya sin el NOT), guardada con NOT (3 de 3).
+  VV, [2], [3] y todo lo demás quedan iguales. El VB del DUEÑO lee el
+  reporte al reinsertar la tarjeta y calcula él la recompensa/castigo.
+  Observado del lado del que pelea (MagnaKidmon contra Hedorah Perfect):
+  ±400 VV por el resultado + 500 VV de bono por pelear (el usuario lo leyó en
+  pantalla; MagnaKidmon ya estaba en 9999, tope). Récord del VB: 024/024 →
+  025/026. Empate: formato desconocido. Consecuencia: escribir VV nuevos
+  (lo que hace hoy RETIRAR) no sirve; hay que escribir un reporte así.
 - **Power Trophies** (mod "Digimon Link Pendulum", PDF de investigación
   del mod): cada 10 = +50% DP, +25% HP, +1 AP (`PowerTrophyBonus`,
   verificado con MagnaKidmon: 35 → DP+75, HP+9, AP+3). **Rango por puntos
@@ -154,15 +190,36 @@ se abre el Explorador con el archivo seleccionado y vuelve la pantalla de
 inicio (se muestra ANTES de cerrar la ventana del Digimon: sin ventanas,
 JavaFX cerraría el programa). La VS DIM no tiene un campo conocido de
 "ganó/perdió": el resultado viaja como Vital Values. Sin persistencia: si se
-cierra el programa sin retirar, el saldo se pierde. **PROBADO EN EL VB REAL
-(2026-09-26, usuario): NO FUNCIONA como transporte de resultados.** Una
-devolución con -500 VV fue aceptada por el VB (checksum válido), pero el
-Digimon volvió como si no hubiera peleado: sin recompensa ni castigo. El VB
-IGNORA los Vital Values escritos en la VS DIM al recibirla (probablemente usa
-su propia copia interna). Falta descubrir cómo el VB recibe un resultado de
-batalla por VS DIM: pista sin confirmar = "Resultado del VS.bin" (flags
-`a234a404`, [0]=2 [4]=3 [5]=1, checksum inválido) — averiguar de dónde salió.
-Hasta entonces, RETIRAR devuelve al Digimon sin cambios reales.
+cierra el programa sin retirar, el saldo se pierde. **CONFIRMADO 2026-09-28
+(3ª prueba, VS DIM recién extraída 9999 → devolución 9499): el VB IGNORA los
+VV escritos en la tarjeta.** El resultado debe viajar como "reporte de
+batalla" (ver sección 2, VS DIM). **RETIRAR ya escribe el reporte**
+(decisión del usuario: opción 1, UN reporte con el SALDO TOTAL):
+`DigimonProgress.battleReport()` → saldo > 0 = victoria contra el rival de
+mayor etapa que venció; < 0 = derrota contra el de mayor etapa que lo
+venció; sin batallas o saldo 0 = `copyUnchanged` (sin reporte). Empates no
+se reportan. `VsDimWriter.writeBattleReport` reproduce BYTE A BYTE los
+reportes reales "VS 2" y "VS 3" desde el Hedorah original, y se niega a
+partir de un archivo que ya tenga reporte ([0]≠0). [4] = etapa del rival es
+SUPUESTO (ver sección 2). Nombre: "VS DIM <especie> <fecha> (victoria vs
+Perfect).bin". Los VV del programa (`VitalRewards`) quedan solo como
+ESTIMACIÓN (y la tabla no coincide con el mod: contra Perfect el VB dio
+±400 + 500 de bono). **PROBADO EN EL VB REAL (2026-09-28, usuario):
+FUNCIONA** — al reinsertar la VS DIM retirada, el VB entrega el resultado
+de la batalla. Pruebas anteriores, NO CONCLUYENTES
+(2026-09-26 y 2026-09-28 19:08): el VB aceptó las devoluciones
+(checksum válido) y el Digimon volvió sin cambios, PERO ambas se hicieron
+desde una VS DIM VIEJA: "VS DIM MagnaKidmon.bin" (25/09: 4997 VV, 35
+trofeos), mientras el Digimon real ya tenía 9999 VV y 37 trofeos (lo
+muestran los `dimcard-backup-20260926180918.bin` y
+`...\devoluciones\dimcard-backup-20260928191049.bin` que deja el programa de
+tarjetas al escribir). La devolución llevaba 4497 (4997 - 500). No se sabe
+si el VB ignora siempre los VV de la tarjeta o solo ignoró una foto que no
+coincidía con su Digimon. **Prueba pendiente**: extraer una VS DIM RECIÉN
+sacada (9999), perder una batalla, retirar (9499) y devolverla. Dato nuevo
+sin explicar: el backup del 28/09 tiene [2]=0 (en todas las demás VS DIM
+era 100). Pista aparte: "Resultado del VS.bin" (flags `a234a404`, [0]=2
+[4]=3 [5]=1, checksum inválido) — averiguar de dónde salió.
 
 **Identidad de nombre** (sistema narrativo): `DigimonNameIdentity` guarda
 `slotNameHistory` (mapa slot→nombre), `uniqueName` opcional, y un flag
@@ -264,6 +321,16 @@ verificada**: en la entrada, el portal debe mirar en dirección **opuesta**
 a hacia dónde camina el Digimon (`-dirX`); en la salida, en la **misma**
 dirección (`dirX` directo) — son geometrías distintas, no cambiar esto sin
 volver a probar ambos casos.
+**Portal sin carreras (2026-10-01, bug desde 0.0.2)**: si el Digimon iba
+caminando (paseo o clic-para-mover) al pedir el portal, ese movimiento y el
+del portal movían la MISMA ventana a la vez (se deslizaba a la esquina y
+volvía). Ahora toda entrada/salida pasa por `DigimonInstance.enterPortal` /
+`exitPortal`: cortan el movimiento (`stopMovement`, `clickToMove.cancel`),
+bloquean el clic (`teleporting`) y, si venía moviéndose, `playEnter(...,
+settleFirst=true)` lo deja en IDLE_1/IDLE_2 x2 y RECIÉN entonces lee su
+posición para ubicar el portal. El portal se dibuja DETRÁS del Digimon
+(pedido del usuario): ambas ventanas son "siempre encima" y, tras mostrar el
+portal, `keepPetInFront()` trae al Digimon al frente.
 
 **Convención de orientación** (confirmada en `VPetMovementController`,
 reutilizada en todo lo demás): moverse/mirar a la **derecha** → `scaleX =
@@ -288,6 +355,154 @@ un fundido progresivo en el último 25% del tramo de sobrepaso). HIT no
 tiene fundido, `impact.png` mantiene el protagonismo. Ventana calculada
 como `alto = pantalla*0.62`, `ancho = alto*BG_ASPECT` (nunca al revés,
 para no deformar el fondo).
+
+**ARENA 2 vs 2** (tercer modo de combate, paquete `org.example.arena`,
+menú BATALLA > ARENA 2 VS 2, solo Child+): inspirado en la app Vital Bracelet
+Arena (2022, 2 vs 2 tocando números; dada de baja el 30/09/2024). Su arte
+es de Bandai y NO se usa (figuras propias que imitan disposición y colores);
+sus fórmulas nunca se publicaron, así que las reglas son NUESTRAS y
+configurables (`ArenaConfig`, `...nfigrena.properties`; un archivo viejo
+recibe al final las claves nuevas, las viejas quedan sin uso). Decisiones del
+usuario: equipo = puestos 1 y 2 (si no hay compañero Child+, uno PRESTADO de
+una cápsula o de la carpeta de rivales); contra la máquina (2 DIM cards);
+cambio y W-ATTACK; NO cuenta para el récord ni el reporte. **Stats convertidos
+como la app (2026-10-02, dato DEFINITIVO del usuario, fijo en código)**:
+DP x 120 = BP, HP x 400 = HP, AP x 150 = AP (`ArenaFighter.BP_PER_DP`,
+`HP_PER_HP`, `AP_PER_AP`; HP 8 = 3200, como los ~3080 de los videos). Reemplaza
+al viejo "HP x10" (`vida.multiplicador` ya no se usa). El BP entra en la misma
+fórmula del VB por proporción, así que BP o DP dan igual.
+**Reglas v2 (2026-10-01, a partir de 2 videos de la app que pasó el usuario +
+sus decisiones)**: ATAQUE = COMBO POR TIEMPO (`combo.segundos`=10): siempre
+hay 5 números a la vista, se tocan en orden y el acertado lo reemplaza el
+siguiente (1-5, luego 6...); se mueven y rebotan; uno fuera de orden cuesta
+`combo.penalizacionError` s. El combo da BONO DE AP = 40 % x (1 - e^(-combo/5.65))
+(13 ≈ +36 %, 18 ≈ +38 %, como en el video). Contador de 10 círculos: LLENO
+(combo ≥ `combo.paraBig`=10) = BIG ATTACK (decisión del usuario). NO HAY
+FALLOS (decisión del usuario): el DP funciona como "BP" con la fórmula del VB
+(`BattleEngine.hitRate`, DP + atributo): x(1 + peso·(acierto-50)/100), 50 % =
+x1. Daño = AP (x150) x `dano.factor`(1.33) x (1+bono) x BP x defensa, contra HP
+(x400); 1.33 = el mismo balance de antes de convertir (`dano.base` quedó
+comentado en el archivo del usuario). **Al ser atacado se ELIGE (2026-10-02,
+como la app)**: DEFENSE = minijuego de la barra (escudo x0.4, amarillo x0.7) o
+PROTECT = el COMPAÑERO aparece un momento delante, RECIBE el golpe (sin
+minijuego, con su propio BP) y vuelve atrás; el activo sigue siendo el mismo
+(si el compañero cae protegiendo, no hay cambio). Sin compañero en pie, PROTECT
+apagado. La app además daba +BP con habilidades del BE (aún no). La máquina usa
+PROTECT a veces (`cpuProtects`: activo < 35 % y compañero mucho mejor, 50 %).
+Pantalla: botones DEFENSE (celeste, escudo) y PROTECT (verde) + tarjeta del
+compañero; la placa del defensor muestra un momento al compañero
+(`forcedPlate`) con la vida de ANTES del golpe (`setPlateHp`) y cae al impacto.
+W-ATTACK = (AP de los dos) x2 x factor, atacan los dos. **Entrada por portal del
+compañero (2026-10-02, pedido del usuario)**: ARENA LOCAL = el puesto 1 entra al
+portal con `keepPortalOpen` y el puesto 2 del escritorio camina detrás
+(`startFollowing`) y cruza el MISMO portal (`TeleportAnimator.playFollowIntoOpenPortal`);
+al terminar salen los dos por el mismo portal (`playExit` con el portal abierto +
+`leaveArenaThrough` → `playExitThroughOpenPortal`, que lo cierra). ARENA ONLINE =
+el puesto 1 ya está en la sala; al llegar `arenaStart`, el puesto 2 del escritorio
+cruza SU portal (`goToArena`) y recién entonces se abre la pelea (los mensajes
+esperan en la cola de `OnlineArenaSession`); al cerrar la ventana solo él vuelve
+por su portal a donde estaba (`returnFromArena`). Ganchos:
+`LobbyWindow.setArenaHooks` → `OfficialBattleUi` → `OnlineArenaSession`
+(beforeStart / onClosed). Sin probar en pantalla. GUTS (`guts.probabilidad`=0.10, decisión del usuario): un golpe de KO
+a veces deja 1 HP. Máquina: combo 6-16. Balance (2000 peleas simuladas, 4
+juegos de stats, atributos iguales): el jugador gana 57-66 % (ataca primero),
+5-10 turnos suyos por pelea, cada golpe quita 20-40 % de la vida, W-ATTACK
+0.5-0.9 por pelea, GUTS ~0.3. `ArenaEngine.Hit` trae `guts`, `big` y `apBonus`;
+`pass(side)` = turno perdido sin golpe (ARENA online, sin elegir a tiempo).
+**Pantalla estilo VB Arena (por defecto; `pantalla.estilo=coliseo` vuelve al
+diseño del coliseo)**: sin fondo de ciudad (degradado oscuro, estelas y una
+línea de neón donde se para cada Digimon), ventana casi cuadrada, rival arriba
+a la derecha y tú abajo a la izquierda, sprites a aumento ENTERO. Placas
+blancas inclinadas con "cola" de globo, insignia de atributo (Va verde, Da
+naranja, Vi morada, Fr turquesa), sprite NAME oscurecido (`darkName`) y barra
+que CAE AL INSTANTE con un tramo rojo de "daño reciente" que se encoge. Reloj
+circular (combo y defensa). Botones inclinados ATTACK (amarillo), W-ATTACK
+(naranja, medidor de 5 segmentos), CHANGE (verde) + tarjeta del compañero.
+Minijuegos en el panel de abajo: números con estrella, contador de 10
+círculos y "COMBO n"; READY → START!; al final EXCELLENT!!/GREAT!/GOOD/BAD +
+"AP +x%". Defensa: tramos en chevrón (verdes, amarillos), ESCUDO en el centro,
+indicador y botón STOP (o ESPACIO / clic). Animaciones: impulso, el Digimon
+EXPULSA su ataque (BIG con 10+ o W-ATTACK, si no SMALL; sprites del firmware,
+girados en la diagonal), impacto con destello y temblor (de toda la pantalla
+si es BIG), retroceso, número de daño amarillo-naranja que salta, escena
+W-ATTACK (negro, líneas amarillas, rayo, los DOS juntos, luego disparan los
+dos), pantalla GUTS!!! magenta, caída (la placa lo sigue mostrando:
+`holdPanel`/`spriteIndex`), cambio deslizándose, WIN!!/LOSE... con saltos y
+pose de VICTORY (local). La ARENA online manda "small"/"big" en `arenaStart`,
+`guts`/`big`/`apBonus` en `arenaHit` y el tiempo del combo en `arenaAttack`
+(protocolo v8); el servidor acepta combos hasta `combo.maximo` y espera
+combo.segundos + 8 s. Protocolo v9 (2026-10-02): stats convertidos en el
+servidor, `arenaDefend.canProtect`, `arenaDefense.protect` (cliente → servidor)
+y `arenaHit.protect`. Balance con stats convertidos y PROTECT (2000 peleas x 4):
+el jugador gana 58-69 %, 5-9 turnos, 21-39 % de vida por golpe. Probado fuera de pantalla con Kumamon/Louwemon vs
+Duskmon (turno, números, defensa, impacto, BIG, W-ATTACK, GUTS). Visto pero
+sin implementar: símbolos verdes sobre un Digimon en un video (¿estado
+alterado?). Excluido: App Abilities (solo BE), objetos, stats entrenados del
+BE, rangos y recompensas.
+
+**LABORATORIO** (versión PC de la app Vital Bracelet Lab, paquete
+`org.example.lab`, interfaz SIMPLE a propósito — decisión del usuario):
+ventana aparte y ÚNICA (`LabWindow.open()`), los Digimon siguen en el
+escritorio. Se abre desde la pantalla de inicio (botón LABORATORIO, sin
+Digimon cargado) o menú V-PET > LAB. Pestañas: ALMACÉN (`LabStorage`,
+cápsulas = COPIAS de VS DIM en `...\laboratorio\capsulas\<id>.bin` +
+`.properties` con especie, edad, fecha, notas y origen; el usuario confirmó
+que el VB conserva a su Digimon y que, al devolver una cápsula, el VB recibe
+la versión de la cápsula → puede quedar vieja; rechaza archivos con reporte
+de batalla (`VsDimWriter.hasBattleReport`); botones IMPORTAR VS DIM, AL
+ESCRITORIO (`Main.spawnDigimon`, máx. 2, edad = la guardada + días
+transcurridos), EXPORTAR PARA EL VB (copia en devoluciones), ELIMINAR (a
+`papelera`, nunca borra), ABRIR CARPETA), DIGIDEX (`Digidex`: especies
+vistas por hash SHA-1 del sprite NAME, PNG + `digidex.properties`
+veces|especie|primera vez; registra tu Digimon al aparecer, cápsulas y
+rivales de Aleatoria/ARENA; el online todavía no) e HISTORIAL
+(`BattleHistory`, `historial.tsv` en disco: fecha, Digimon, modo, rival,
+resultado, VV estimados; Aleatoria, Oficial Libre/Original y ARENA). Los
+sprites NAME se muestran sobre una franja oscura (son letras claras con
+fondo transparente). ARENA: si no hay otro Digimon Child+ en el escritorio,
+el compañero sale de una CÁPSULA al azar antes que de las DIM cards.
+Fuera por ahora: NFC (versión celular), misiones, objetos, raids, rankings.
+
+**Equipo = PUESTOS del escritorio** (decisión del usuario, como Vital
+Bracelet Arena): el orden de `DigimonRegistry` es el puesto; índice 0 =
+PUESTO 1 (principal: te sigue en la sala y pelea las batallas tipo VB),
+índice 1 = PUESTO 2 (secundario: solo cuenta en el 2 vs 2). TODO Digimon del
+escritorio es una cápsula (`DigimonInstance.capsuleId`): cargar desde la
+pantalla de inicio la guarda en el Laboratorio (`LabStorage.findSame` por
+SHA-1 reusa la misma VS DIM). Cambiar quién está en el escritorio YA NO
+exige retirar: `DesktopTeam` (lo implementa `Main`) + `DesktopTeam.askReplace`
+pregunta "¿a cuál reemplaza?" y el reemplazado vuelve a su cápsula por el
+portal (`DigimonInstance.dismiss`, sin archivo ni Explorador). Si estaba
+FUERA (sala online, pelea) el equipo cambia al instante y su ventana se
+cierra al volver (`away`/`pendingDismiss`/`comeBack`). Laboratorio: recuadro
+"EN EL ESCRITORIO — Puesto 1 / Puesto 2", botón INTERCAMBIAR PUESTOS 1 ⇄ 2 y
+"★ Puesto N" en la lista. El récord pendiente de cada Digimon se GUARDA en
+su cápsula (`DigimonProgress.toProperties/restore`, claves `progreso.*`)
+tras cada batalla y se vacía al RETIRAR: sobrevive a reemplazos y a cerrar
+el programa. `registry.putAt` INSERTA (no pisa): al reemplazar el puesto 1,
+el otro no se pierde (bug evitado). ARENA local: equipo = puestos 1 y 2
+(Child+), no "quien recibió el clic + el otro".
+**Cambios de equipo con la sala online abierta (2026-10-01, pedido del
+usuario)**: a la sala entra SIEMPRE el puesto 1 (VS ONLINE desde el menú del
+puesto 2 manda al puesto 1); `DigimonInstance.inLobby` marca quién está allá y
+al cerrar la sala vuelve QUIEN ESTÉ en ese momento (`returnFromLobby`).
+Reemplazar el puesto 1 desde la PC: el nuevo NO aparece en el escritorio
+(`setSpawnIntoLobby`, ventana vacía hasta cerrar la sala); en la sala el viejo
+camina a un portal y se desvanece, el portal QUEDA ABIERTO y por él sale el
+nuevo (`LobbyWindow.beginPortalSwap` + `LobbyPortalSwap`). INTERCAMBIAR 1 ⇄ 2:
+el de la sala entra a su portal y el del escritorio al suyo; cuando este
+termina de entrar, el de la sala sale por ESE MISMO portal del escritorio,
+que quedó abierto (`TeleportAnimator.keepPortalOpen` +
+`playExitThroughOpenPortal`, `leaveLobbyThrough`; antes se cerraba y se abría
+otro en el centro, corregido a pedido del usuario) y el otro sale por el portal de la sala (se reenvía el
+equipo recién entonces). Los demás jugadores ven el mismo cambio por portal
+cuando cambia el aspecto del Digimon (`LobbyDigimon.look`); si solo cambia el
+compañero, el Digimon no salta (`takePlaceOf`). No se puede cambiar el equipo
+durante un reto/pelea ni con un cambio por portal en curso
+(`LobbyWindow.teamChangeBlocker`); si el servidor rechaza el equipo con el
+portal abierto, se reintenta una vez a los 5,5 s y si no, vuelve a salir el
+mismo. Probado fuera de pantalla (sala): MagnaKidmon entra, portal abierto,
+sale Dynasmon y sigue al avatar. Sin probar en pantalla: la parte del escritorio.
 
 **Pantallas del coliseo** (`BattleScreenHud`, dentro de
 `getLeftScreenOverlay()`/`getRightScreenOverlay()`): izquierda = jugador,
@@ -358,6 +573,27 @@ la depuración; siguen existiendo en 0.0.2).
 
 ## 6. Decisiones deliberadas — no re-litigar sin nueva evidencia
 
+- **Lector de nombres SIN IA HECHO (2026-10-02, pedido del usuario; reemplaza la
+  decisión de abajo)**: `org.example.dim.NameSpriteReader`. El usuario dio 3
+  fuentes del VB (hojas con las letras separadas por columnas MAGENTA de ancho
+  variable): DigiScript (68 celdas: A-Z, a-z, espacio - = _ ( ) 1-0; ÚNICA con
+  minúsculas), Official Bandai (42: A-Z, espacio - = _ ( ) 1-0; = la de DIMNameGen)
+  y Agero (42: con [ ] en vez de ( )). Las otras dos se transcriben en mayúsculas.
+  Hojas en `resources/fonts/VB_Alphabet_ENG_*.png`; plantillas de texto en
+  `resources/fonts/vb_name_fonts.txt` (las genera `tools/GenerarPlantillasNombre.java`;
+  el lector no decodifica imágenes). Cómo lee: tinta = píxel claro (el verde
+  0x07E0 es transparente); por fuente y desplazamiento vertical (-3..+3), una
+  programación dinámica cubre las columnas con letras (costo = píxeles distintos;
+  saltar tinta x2), hueco de 3+ columnas = espacio; gana la fuente con menos
+  error, tope 12 %. Probado con TODAS las DIM/VS DIM de la PC: 76 nombres latinos
+  leídos (casi todos con 0 % de error, 15-60 ms): "MagnaKidmon", "DYNASMON",
+  "LORD KNIGHTMON", "LUCEMON- FALLDOWN MODE", "SIRIUSMON" (Official Bandai),
+  "Hedorah"... Los 48 sin leer son TODOS katakana (Agumon, Angoramon, Impulse
+  City). Las DIM reales usan sobre todo DigiScript (por eso DIMNameGen no
+  coincidía). Uso: `DigimonInstance` lo prueba PRIMERO y solo si falla usa la
+  visión (SpeciesNameReader); al importar (pantalla de inicio y Laboratorio) la
+  especie viene PRELLENADA con lo leído y se puede corregir (0.0.3.1 incluida).
+  Se guarda tal cual se lee (sin pasar a "Dynasmon").
 - **OCR por plantillas: descartado** (fuentes DIMNameGen, comparación de
   píxeles — la fuente real no coincide con ninguna plantilla).
   `DigimonNameRecognizer` y sus fuentes se borraron en la depuración de 0.0.3.
@@ -424,6 +660,21 @@ la depuración; siguen existiendo en 0.0.2).
   convención del proyecto). Cuadros: 0 quieto, 1-2 caminar; la dirección y
   el cuadro los deduce el cliente del movimiento (`AvatarAnim`); se dibuja
   por orden de altura y con marcador cian sobre el propio jugador.
+  **Avatar nuevo (2026-10-01, referencias del usuario)**: de PERFIL con
+  proporciones REALISTAS (no chibi: cabeza chica, cuerpo alto), cabello negro
+  despeinado con mechones cortos, ojo pequeño, nariz, oreja; chaqueta azul
+  ABIERTA sobre polera blanca, pantalón negro, zapatillas oscuras con suela
+  blanca. SOLO izquierda/derecha (decisión del usuario, como los Digimon): mira
+  a la izquierda y se espeja; al ir derecho arriba o abajo conserva hacia dónde
+  miraba. Imagen 36x60 px = 18x30 en el mundo (1:1 con la cámara x2, como los
+  Digimon). Se GENERA por capas (elipses, polígonos, segmentos gruesos) con
+  contorno automático por capa y extremidades de atrás oscurecidas; caminata
+  de 6 cuadros a partir de ángulos de cadera/rodilla/hombro (`LEG_CYCLE`), el
+  cuerpo sube y baja solo (apoya el pie más bajo) y la cadera se redondea a
+  píxel entero para que la cara no tiemble. Cabeza x1.15 (`HEAD_SCALE`) para
+  que la cara se lea. Cuadro 0 quieto, 1-6 caminando (110 ms cada uno).
+  Colores en `Palette` (pelo, chaqueta, polera, pantalón, zapatillas) para el
+  editor futuro. Ya no hay vistas de frente ni de espaldas.
   **Digimon que sigue al avatar + rango HECHO** (protocolo v3): el cliente
   manda su Digimon una vez (`LobbyDigimon.payloadFrom`): especie, atributo,
   etapa, Power Trophies y 4 cuadros (IDLE_1, IDLE_2, WALK_1, WALK_2) como
@@ -501,8 +752,86 @@ la depuración; siguen existiendo en 0.0.2).
   ("libre"/"original", otro valor = rechazado), el retado ve el modo antes
   de aceptar y el mensaje "battle" lo repite. Probado: MagnaKidmon (35) vs
   Dynasmon (67): Libre HP 21 vs 30, Original 12 vs 12.
+  **Cámara y movimiento de la sala (2026-10-01, pedido del usuario)**: ya
+  no se ve toda la sala: lienzo 960×600 con CÁMARA x2 (`LobbyWindow.ZOOM`)
+  centrada en tu avatar, que alcanza suavemente y no se sale del mapa;
+  minimapa en la esquina superior derecha (jugadores como puntos y recuadro
+  de la cámara); avisos de lugares en pantalla (arriba al centro). El mapa
+  se pre-dibuja al doble de resolución (`LobbyMapRenderer.renderStatic(2)`)
+  y los textos del mundo usan tamaño de fuente / 2 (el texto del lienzo es
+  vectorial). El Digimon de la sala ya NO se reduce promediando 2x2: mide
+  la mitad en el mundo y con la cámara x2 se ve con sus píxeles 1:1. **Efecto
+  "látigo" corregido**: era un suavizado exponencial (25 %/cuadro el avatar,
+  18 %/cuadro el Digimon) sobre fotos del servidor a 10 Hz → arrancaba y
+  frenaba 10 veces por segundo. Ahora: INTERPOLACIÓN CON RETRASO (se dibuja
+  120 ms en el pasado, lineal entre las dos fotos que rodean ese instante →
+  velocidad constante = `Protocol.WALK_SPEED` 160, la misma que usa el
+  servidor), margen de 150 ms antes de mostrar "quieto", paso del avatar
+  cada 170 ms y del Digimon cada 220 ms. El Digimon sigue POR EL MISMO
+  CAMINO del avatar (migas cada 3 u, como los compañeros de Pokémon), a 26 u
+  de camino detrás, a velocidad constante (x1.35 si se queda atrás): no
+  corta esquinas ni atraviesa muros. Medido fuera de pantalla (simulación
+  de servidor a 10 Hz doblando una esquina): avatar 161 u/s de promedio,
+  nunca 0 (antes había cuadros detenidos), Digimon 0 cuadros sobre muro.
+  **Mapa v2 (2026-10-01, pedido del usuario; protocolo v7, mapa
+  "torneo-1f-v2")**: `LobbyMapRenderer` ahora pinta PIXEL ART real (rectángulos
+  enteros a 1 px por unidad del mundo, agrandado sin suavizado; solo las
+  etiquetas son texto vectorial encima). Detalles de escena SIN funciones:
+  alfombra roja de torneo, estandartes y apliques en los muros, marcador "VS
+  ONLINE" (letras pixel 5x5 propias), vitrinas de trofeos, macetas, bancas,
+  puertas de vidrio en la entrada, kiosco de la tabla y PC dibujados. Training
+  Room ABIERTO, solo estético (piso de madera, colchoneta, espejo, sacos,
+  pesas, mancuernas, muñecos, trotadoras, dispensador). Portal: solo
+  decorativo, animado con la misma hoja del portal (`drawPortalAnimation`),
+  sobre una plataforma; ya no dice BLOQUEADO ni tiene aviso. Los adornos son
+  `LobbyMap.PROPS` (casillas 'D', no se pisan; el servidor las respeta).
+  Comprobado: las 406 casillas pisables se alcanzan desde la entrada.
+  **Protocolo v6 (equipo + PC + ARENA online)**: el mensaje "digimon" lleva
+  el PUESTO 1 y, si hay, el PUESTO 2 como "partner" (mismo formato y misma
+  validación; al resto solo se reparten sus cuadros). Se puede REENVIAR
+  (cambio de equipo) salvo durante un reto o pelea (`teamRejected`), máx. 1
+  cada 5 s; tope de línea 256 KB. La sala envía `DigimonInstance.teamPayload`
+  (puestos del registro) y se reenvía con `LobbyWindow.notifyTeamChanged()`
+  tras cada cambio en el Laboratorio. Las Batallas Oficiales se anotan al
+  PUESTO 1 del momento (`recordOnlineBattle`). **PC** en la sala
+  (`LobbyMap.PC`='K', muro norte, casillas 34-35 de la fila 12, frente a la
+  terminal): al LLEGAR abre el Laboratorio. **ARENA 2 vs 2 online** = 3er
+  modo del NPC (`Protocol.MODE_ARENA`="arena"): exige puesto 1 y 2 Child+ en
+  ambos (`OnlineArenaMatch.teamProblem`). `OnlineArenaMatch` (servidor) corre
+  `ArenaEngine` (mismas reglas que la local, SIN bono de trofeos, config del
+  servidor) y manda arenaStart / arenaTurn / arenaAttack / arenaDefend /
+  arenaWait / arenaSwitch / arenaHit / arenaEnd; el cliente responde
+  arenaAction / arenaCombo / arenaDefense. Límites: acción 25 s, minijuego
+  14 s (sin respuesta = golpe fallido o sin defensa); combo 0 = fallo sin
+  pedir defensa; si uno se va, gana el otro. `OnlineArenaSession`
+  (cliente) procesa los mensajes EN COLA, uno tras otro (espera cada
+  animación), con `ArenaScreen` en modo online (`openOnline`, `promptAction`,
+  `playAttack`, `playDefense`, `playHit`, `playSwitch`, `showEnd`) y un
+  `ArenaEngine` espejo (`applyState`/`stateJson`; si eres "b", se invierten
+  los lados para que siempre estés a la izquierda). Si cierras la ventana a
+  media pelea, la sesión sigue escuchando y anota el final. NO cuenta para
+  el récord (solo historial y comentario). OJO: combo y defensa los informa
+  el cliente (el servidor solo los acota): sirve entre amigos, no es a
+  prueba de trampas. Probado con 2 jugadores automáticos: reto sin compañero
+  rechazado, reenvío de equipo, cambio de equipo en plena pelea rechazado y
+  pelea completa (22 turnos). Sin probar: tiempos límite y desconexión a
+  media pelea.
   Siguiente: cuentas (Fase 3). Usará BattleEngine + coliseo + HUD +
   PowerTrophyBonus en la Fase 4.
+- **Protecciones del servidor y bug de nombres (2026-10-02)**: una conexión que
+  no manda el "hello" en 10 s se corta (`ClientConnection.HELLO_TIMEOUT_SECONDS`;
+  después rige la inactividad de 90 s); una IP con 5 nombres rechazados en 60 s
+  queda bloqueada 10 min (`VsServer.noteRejected`); el servidor solo acepta JSON
+  de texto y nunca guarda ni ejecuta lo que mandan los clientes. Probado: corte
+  a los 10,0 s y bloqueo al 6.º intento. **Bug real de nombres corregido**: el
+  nombre de jugador vivía solo en `assistant.properties`, que es UNO para todos
+  los programas abiertos en la misma PC, y la sala lo leía del archivo al entrar
+  → con dos programas abiertos se mezclaban los nombres (y entrar por el botón
+  LABORATORIO no guardaba el nombre). Ahora `AssistantSettings` guarda en
+  MEMORIA el nombre/servidor de la pantalla de inicio de ESE programa
+  (`sessionName`/`sessionHost`); el archivo solo los precarga. Probado con 2
+  programas a la vez. 0.0.3.1 viene con servidor "100.x" (decisión del usuario):
+  cada probador escribe la IP; si no es válida, el juego arranca igual.
 - **0.0.3.1 (probadores, sin asistente ni chat IA)**: MISMO código con
   `-Ddigimon.edicion=tester` (`Edition.ASSISTANT=false`): sin Ollama, sin
   página ASISTENTE, sin chat (el globo muestra textos fijos, p. ej. "¡Gané!
@@ -523,7 +852,13 @@ la depuración; siguen existiendo en 0.0.2).
 - **Batalla aleatoria**: los rivales salen de `RivalDimPool` = DIM cards
   NORMALES de la carpeta de Ajustes (`batalla.carpetaRivales`), porque la
   VS DIM solo trae los sprites de su propio Digimon. Sin carpeta, el
-  Digimon lo avisa en su burbuja.
+  Digimon lo avisa en su burbuja. Se revisan también SUBCARPETAS (hasta 3
+  niveles) y se recuerdan los archivos que no sirven (VS DIM, BE Memory,
+  ilegibles). En Ajustes, ELEGIR CARPETA de rivales GUARDA AL INSTANTE: antes
+  el Popup del menú (autoHide) se cerraba al abrir el selector y la carpeta
+  nunca llegaba a guardarse (bug real, visto el 2026-09-29). Al Popup del
+  menú se le agrega la clase CSS "root" para quitar el aviso de JavaFX
+  "Could not resolve '-fx-text-base-color'".
 - **VS DIM en el programa** (`DimVPetData.fromVsDim`, DimCard sintético,
   forma fija). Pendiente: identificar el campo [2].
 - **Arnés temporal restante**: `AttackSpriteResolver.runDiagnostics()` en

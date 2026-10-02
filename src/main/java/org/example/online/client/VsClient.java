@@ -98,6 +98,22 @@ public class VsClient {
         send(Protocol.msg("battleDone"));
     }
 
+    // ---- ARENA 2 vs 2 online (el servidor decide turnos y daño) ----
+
+    /** "attack", "switch" o "w". */
+    public void arenaAction(String action) {
+        send(Protocol.msg("arenaAction").put("action", action));
+    }
+
+    public void arenaCombo(int combo) {
+        send(Protocol.msg("arenaCombo").put("combo", combo));
+    }
+
+    /** Defensa elegida: protect = recibe el golpe el compañero (PROTECT); si no, la distancia del minijuego. */
+    public void arenaDefense(double distance, boolean protect) {
+        send(Protocol.msg("arenaDefense").put("distance", distance).put("protect", protect));
+    }
+
     public void moveTo(double x, double y) {
         send(Protocol.msg("move").put("x", Math.round(x)).put("y", Math.round(y)));
     }

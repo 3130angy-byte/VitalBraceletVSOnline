@@ -25,6 +25,15 @@ import com.github.cfogrady.vb.dim.sprite.SpriteData;
 
 import org.example.Edition;
 import org.example.animation.DimAnimationPlayer;
+import org.example.arena.ArenaConfig;
+import org.example.arena.ArenaEngine;
+import org.example.arena.ArenaFighter;
+import org.example.arena.ArenaScreen;
+import org.example.lab.BattleHistory;
+import org.example.lab.Digidex;
+import org.example.lab.LabStorage;
+import org.example.lab.LabWindow;
+import org.example.online.Protocol;
 import org.example.animation.DimSpriteSet;
 import org.example.animation.SpriteRole;
 import org.example.animation.TeleportAnimator;
@@ -46,12 +55,14 @@ import org.example.chat.PersonalityBaseLoader;
 import org.example.chat.AssistantSettings;
 import org.example.chat.SpeciesNameReader;
 import org.example.online.client.LobbyDigimon;
+import org.example.online.client.OfficialBattleResult;
 import org.example.online.client.LobbyWindow;
 import org.json.JSONObject;
 import org.example.chat.SpeechBubble;
 import org.example.chat.SpeechTraits;
 import org.example.chat.VPetEvent;
 import org.example.dim.DimSpriteImageFactory;
+import org.example.dim.NameSpriteReader;
 import org.example.dim.DimVPetData;
 import org.example.dim.VsDimData;
 import org.example.interaction.VPetClickToMoveController;
@@ -99,6 +110,8 @@ public class DigimonInstance {
     private DimAnimationPlayer animationPlayer;
     private VPetMovementController movementController;
     private VPetClickToMoveController clickToMove;
+    /** Entrando o saliendo por el portal: nada más puede mover la ventana. */
+    private boolean teleporting = false;
     private CompanionController companion;
     private VPetMenu menu;
     private AiConversationController aiController;
@@ -111,6 +124,21 @@ public class DigimonInstance {
     /** Aviso a Main cuando el Digimon se retiró (vuelve la pantalla de inicio). */
     private Consumer<DigimonInstance> onRetired;
     private boolean retiring = false;
+    /** Cápsula del Laboratorio de la que salió (todo Digimon del escritorio tiene una). */
+    private String capsuleId;
+    /** Está dentro del portal (batalla, ARENA o sala online). */
+    private boolean away = false;
+    /** Lo reemplazaron desde el Laboratorio mientras estaba fuera: se va al volver. */
+    private Runnable pendingDismiss;
+    /** Está en la sala del VS Online siguiendo a tu avatar (caso particular de away). */
+    private boolean inLobby = false;
+    /** A dónde vuelve en el escritorio al salir de la sala. */
+    private double lobbyReturnX, lobbyReturnY;
+    /** Nace directo en la sala (reemplazo desde la PC): sin animación de llegada al escritorio. */
+    private boolean spawnIntoLobby = false;
+    /** Está dentro de una ARENA 2 vs 2 como compañero (puesto 2); vuelve a donde estaba. */
+    private boolean inArena = false;
+    private double arenaReturnX, arenaReturnY;
 
     private DigimonInstance(String instanceId, Path sourceBinPath, int importedAgeDays) {
         this.instanceId = instanceId;
@@ -136,6 +164,91 @@ public class DigimonInstance {
         this.onRetired = onRetired;
     }
 
+    public void setCapsuleId(String capsuleId) { this.capsuleId = capsuleId; }
+    public String getCapsuleId() { return capsuleId; }
+
+    /**
+     * Sale del escritorio y vuelve a su cápsula del Laboratorio, SIN generar
+     * archivo para el VB (eso es RETIRAR). Guarda su récord pendiente. Si
+     * está dentro del portal (sala online, batalla), se va al volver de ahí.
+     */
+    public void dismiss(Runnable onGone) {
+        if (capsuleId != null && progress != null) LabStorage.saveProgress(capsuleId, progress.toProperties());
+        Runnable finish = () -> {
+            stopAll();
+            dispose();
+            onGone.run();
+        };
+        if (inLobby) {
+            // En la sala: la sala lo anima entrando a su portal (LobbyWindow.beginPortalSwap);
+            // aquí su ventana ya está vacía, así que se cierra al instante.
+            inLobby = false;
+            away = false;
+            stopAll();
+            dispose();
+            onGone.run();
+            return;
+        }
+        if (away) {
+            // Está en una pelea: el equipo cambia YA (el nuevo ocupa su
+            // puesto), y esta ventana, que está escondida, se cierra cuando vuelva.
+            pendingDismiss = () -> {
+                stopAll();
+                dispose();
+            };
+            onGone.run();
+            return;
+        }
+        retiring = true;
+        companion.setMenuOpen(true);
+        stopAll();
+        animationPlayer.stop();
+        enterPortal(new TeleportAnimator(), animationPlayer.getSpriteSet(), finish);
+    }
+
+    /**
+     * Entrada al portal. Primero CORTA el paseo, el clic-para-mover o la
+     * acción que estuviera en curso: antes seguían moviendo la ventana a la
+     * vez que el portal y el Digimon se deslizaba hasta la esquina y volvía
+     * (bug desde 0.0.2). Si venía moviéndose, se queda en IDLE un momento y
+     * recién entonces se calcula dónde aparece el portal (TeleportAnimator).
+     */
+    private void enterPortal(TeleportAnimator teleport, DimSpriteSet sprites, Runnable onComplete) {
+        boolean wasMoving = movementController.isMoving();
+        movementController.stopMovement();
+        clickToMove.cancel();
+        animationPlayer.stop();
+        teleporting = true;
+        teleport.playEnter(imageView, stage, sprites, currentStage, wasMoving, () -> {
+            teleporting = false;
+            onComplete.run();
+        });
+    }
+
+    /** Salida del portal; mientras dura, el clic no lo mueve. */
+    private void exitPortal(TeleportAnimator teleport, DimSpriteSet sprites, double x, double y, Runnable onComplete) {
+        clickToMove.cancel();
+        teleporting = true;
+        teleport.playExit(imageView, stage, sprites, x, y, () -> {
+            teleporting = false;
+            onComplete.run();
+        });
+    }
+
+    /** Vuelve del portal: normalmente con la animación de salida; si lo reemplazaron mientras tanto, se va. */
+    private void comeBack(Runnable exitAnimation) {
+        away = false;
+        if (pendingDismiss != null) {
+            Runnable finish = pendingDismiss;
+            pendingDismiss = null;
+            finish.run();
+            return;
+        }
+        exitAnimation.run();
+    }
+
+    public boolean isAway() { return away; }
+
     public void spawn(double x, double y, OllamaClient ollamaClient, DigimonRegistry registry) throws Exception {
         this.registry = registry;
         this.ollamaClient = ollamaClient;
@@ -146,6 +259,8 @@ public class DigimonInstance {
         VsDimData vs = dimData.getVsData();
         this.currentSlot = vs.slot();
         this.progress = new DigimonProgress(vs.vitalValues(), vs.powerTrophies());
+        // Récord pendiente guardado en su cápsula (sobrevive a reemplazos y a cerrar el programa).
+        if (capsuleId != null) progress.restore(LabStorage.loadProgress(capsuleId));
 
         this.aiController = new AiConversationController(instanceId, chatMemory, ollamaClient, registry);
         this.speechBubble = new SpeechBubble();
@@ -194,13 +309,14 @@ public class DigimonInstance {
         companion = new CompanionController(stage, movementController, clickToMove, currentStage);
         menu = new VPetMenu(stage, companion, currentStage, aiController,
                 this::battleRandomAction, this::vsOnlineAction, this::openInfoPanel, this::updatePersonalityContext,
-                this::retireAction);
+                this::retireAction, this::arenaAction);
 
         // 0.0.3.1 no tiene chat: el globo solo muestra textos fijos.
         if (Edition.ASSISTANT) speechBubble.setOnBubbleClicked(() -> menu.openChat(stage.getX(), stage.getY() - 200));
         speechBubble.setDigimonName(displayName);
         menu.setDigimonName(displayName);
         refreshNameSpriteImage();
+        Digidex.seen(dimData.getSpritesForSlot(currentSlot).get(0), recognizedSpecies);
         speechBubble.setDigimonNameSpriteImage(nameSpriteImage);
         menu.setDigimonNameSpriteImage(nameSpriteImage);
 
@@ -212,6 +328,7 @@ public class DigimonInstance {
         });
 
         imageView.setOnMouseClicked(e -> {
+            if (teleporting) return; // en plena animación del portal no se le manda nada
             if (e.getButton() == MouseButton.PRIMARY) {
                 clickToMove.onPetClicked();
             } else if (e.getButton() == MouseButton.SECONDARY) {
@@ -222,11 +339,21 @@ public class DigimonInstance {
         // Llega al escritorio saliendo de un portal (pedido del usuario); recién
         // entonces empieza a pasear. Mientras tanto no se le puede mandar nada.
         companion.setMenuOpen(true);
-        new TeleportAnimator().playExit(imageView, stage, sprites, stage.getX(), stage.getY(), () -> {
-            animationPlayer.play(VPetAnimations.idle(currentStage), 2.0);
-            companion.start();
-            companion.setMenuOpen(false);
-        });
+        if (spawnIntoLobby) {
+            // Reemplazó al puesto 1 mientras estaba en la sala: aparece ALLÁ (por el portal de
+            // la sala), no aquí. Su ventana queda vacía hasta que cierres la sala.
+            imageView.setVisible(false);
+            lobbyReturnX = stage.getX();
+            lobbyReturnY = stage.getY();
+            away = true;
+            inLobby = true;
+        } else {
+            exitPortal(new TeleportAnimator(), sprites, stage.getX(), stage.getY(), () -> {
+                animationPlayer.play(VPetAnimations.idle(currentStage), 2.0);
+                companion.start();
+                companion.setMenuOpen(false);
+            });
+        }
 
         if (!Edition.ASSISTANT) return; // sin IA: nada de charlas ni noticias por iniciativa propia
         socialCheckTimer = new Timeline(new KeyFrame(Duration.minutes(5), e -> {
@@ -242,17 +369,20 @@ public class DigimonInstance {
     private void refreshNameSpriteImage() {
         SpriteData.Sprite rawNameSprite = dimData.getSpritesForSlot(currentSlot).get(0);
         this.nameSpriteImage = DimSpriteImageFactory.toNativeImage(rawNameSprite);
-        startSpeciesRecognition();
+        startSpeciesRecognition(rawNameSprite);
     }
 
     /**
-     * Lee la especie del sprite NAME con el modelo de visión (ver
-     * SpeciesNameReader), en segundo plano. Mientras tanto, o si no se puede
+     * Lee la especie del sprite NAME. Primero SIN IA (NameSpriteReader:
+     * plantillas de las fuentes del VB, al instante y sin errores con letras
+     * latinas); si no puede (p. ej. katakana), con el modelo de visión
+     * (SpeciesNameReader), en segundo plano. Mientras tanto, o si no se puede
      * leer, se muestra "Digimon" -- nunca el nombre del archivo.
      */
-    private void startSpeciesRecognition() {
-        if (!Edition.ASSISTANT) return; // 0.0.3.1: la especie la escribió el usuario (setTypedSpecies)
-        recognizedSpecies = null;
+    private void startSpeciesRecognition(SpriteData.Sprite rawNameSprite) {
+        if (!Edition.ASSISTANT) return; // 0.0.3.1: la especie la escribió el usuario (prellenada con NameSpriteReader)
+        recognizedSpecies = NameSpriteReader.read(rawNameSprite).map(NameSpriteReader.Result::text).orElse(null);
+        if (recognizedSpecies != null) return; // leída sin IA: no hace falta el modelo de visión
         SpeciesNameReader.read(nameSpriteImage, ollamaClient).thenAccept(species ->
                 Platform.runLater(() -> {
                     if (species.isEmpty()) return;
@@ -349,25 +479,8 @@ public class DigimonInstance {
      * (RivalDimPool). Esas DIM no se crían: solo aportan rivales.
      */
     private void battleRandomAction() {
-        Optional<DimVPetData> rivalCardOpt = RivalDimPool.pickRandomCard();
-        if (rivalCardOpt.isEmpty() && !Edition.ASSISTANT) {
-            // 0.0.3.1 no tiene la pantalla de Ajustes: la carpeta se elige aquí mismo.
-            DirectoryChooser chooser = new DirectoryChooser();
-            chooser.setTitle("Elige una carpeta con DIM cards normales (.bin) para los rivales");
-            java.io.File folder = chooser.showDialog(stage);
-            if (folder == null) return;
-            AssistantSettings.saveRivalFolder(folder.getAbsolutePath());
-            rivalCardOpt = RivalDimPool.pickRandomCard();
-            if (rivalCardOpt.isEmpty()) {
-                aiController.announce("En esa carpeta no encontré DIM cards normales para pelear.");
-                return;
-            }
-        }
-        if (rivalCardOpt.isEmpty()) {
-            speechBubble.show("Para pelear necesito rivales: elige una carpeta con DIM cards en "
-                    + "Asistente > Funciones > Ajustes.", stage);
-            return;
-        }
+        Optional<DimVPetData> rivalCardOpt = rivalCard();
+        if (rivalCardOpt.isEmpty()) return;
         DimVPetData rivalCard = rivalCardOpt.get();
 
         companion.setMenuOpen(true);
@@ -379,9 +492,11 @@ public class DigimonInstance {
         TeleportAnimator teleport = new TeleportAnimator();
         DimSpriteSet currentSprites = animationPlayer.getSpriteSet();
 
-        teleport.playEnter(imageView, stage, currentSprites, currentStage, () -> {
+        away = true;
+        enterPortal(teleport, currentSprites, () -> {
             BattleEngine engine = new BattleEngine();
             int enemySlot = engine.pickOpponentSlot(rivalCard, dimData.getStageForSlot(currentSlot), -1);
+            Digidex.seen(rivalCard.getSpritesForSlot(enemySlot).get(0), null);
             BattleEngine.Combatant player = engine.combatantFromSlot(dimData, currentSlot);
             BattleEngine.Combatant enemy = engine.combatantFromSlot(rivalCard, enemySlot);
             BattleEngine.BattleResult result = engine.fight(player, enemy, currentSlot, enemySlot);
@@ -409,16 +524,208 @@ public class DigimonInstance {
                 presentation.dispose();
                 applyBattleResult(result, rivalStage);
 
-                portal.close(() ->
-                        teleport.playExit(imageView, stage, animationPlayer.getSpriteSet(), originalX, originalY, () -> {
+                portal.close(() -> comeBack(() ->
+                        exitPortal(teleport, animationPlayer.getSpriteSet(), originalX, originalY, () -> {
                             if (result.won) companion.victoryAction();
                             else companion.loseAction();
                             companion.setMenuOpen(false);
                         })
-                );
+                ));
             }));
         });
     }
+
+    /**
+     * Una DIM card normal de la carpeta de rivales (RivalDimPool). En 0.0.3.1
+     * no hay pantalla de Ajustes: si falta la carpeta se elige aquí mismo.
+     * Vacío = no hay rivales (ya se le avisó al usuario).
+     */
+    private Optional<DimVPetData> rivalCard() {
+        Optional<DimVPetData> card = RivalDimPool.pickRandomCard();
+        if (card.isEmpty() && !Edition.ASSISTANT) {
+            DirectoryChooser chooser = new DirectoryChooser();
+            chooser.setTitle("Elige una carpeta con DIM cards normales (.bin) para los rivales");
+            java.io.File folder = chooser.showDialog(stage);
+            if (folder == null) return Optional.empty();
+            AssistantSettings.saveRivalFolder(folder.getAbsolutePath());
+            card = RivalDimPool.pickRandomCard();
+            if (card.isEmpty()) {
+                aiController.announce("En esa carpeta no encontré DIM cards normales para pelear.");
+                return Optional.empty();
+            }
+        }
+        if (card.isEmpty()) {
+            speechBubble.show("Para pelear necesito rivales: agrega DIM cards en Laboratorio > RIVALES"
+                    + (Edition.ASSISTANT ? " (o en Asistente > Funciones > Ajustes)." : "."), stage);
+        }
+        return card;
+    }
+
+    // ---------- ARENA (2 vs 2) ----------
+
+    /**
+     * Tercer modo de combate, inspirado en la app Vital Bracelet Arena
+     * (decisiones del usuario): 2 vs 2 contra la máquina, con ataque de
+     * números, defensa con barra, cambio y W-ATTACK (reglas en ArenaEngine /
+     * ArenaConfig). Tu equipo = este Digimon + el otro del escritorio si es
+     * Child o superior; si no, un COMPAÑERO prestado de una DIM card de la
+     * carpeta de rivales. El rival: 2 Digimon de esas DIM cards. NO cuenta
+     * para el récord ni para el reporte al retirar (como en la app real).
+     */
+    private void arenaAction() {
+        ArenaConfig config = ArenaConfig.load();
+        BattleEngine engine = new BattleEngine();
+        int myStage = dimData.getStageForSlot(currentSlot);
+
+        // El equipo sale de los PUESTOS del escritorio (1 = principal, 2 = secundario), no de
+        // quién recibió el clic; los Baby no pelean y se saltan.
+        List<DigimonInstance> fighters = registry.getActiveInstances().stream()
+                .filter(d -> d.getDimData().getStageForSlot(d.getCurrentSlot()) >= 2).toList();
+        DigimonInstance first = fighters.isEmpty() ? this : fighters.get(0);
+        ArenaFighter me = ArenaFighter.fromDim(first.getDimData(), first.getCurrentSlot(), first.getDisplayName(), false, config);
+        ArenaFighter partner = null;
+        if (fighters.size() >= 2) {
+            DigimonInstance second = fighters.get(1);
+            partner = ArenaFighter.fromDim(second.getDimData(), second.getCurrentSlot(), second.getDisplayName(), false, config);
+        }
+
+        // Sin otro Digimon en el escritorio: primero una de tus cápsulas del Laboratorio (Child+).
+        if (partner == null) {
+            List<LabStorage.Capsule> capsules = LabStorage.list().stream()
+                    .filter(c -> c.data().character().stage() >= 2 && !c.file().equals(first.getSourceBinPath())).toList();
+            if (!capsules.isEmpty()) {
+                LabStorage.Capsule c = capsules.get(new java.util.Random().nextInt(capsules.size()));
+                try {
+                    DimVPetData capsuleData = DimVPetData.load(c.file(), 0);
+                    partner = ArenaFighter.fromDim(capsuleData, c.data().slot(), c.species(), true, config);
+                    Digidex.seen(capsuleData.getSpritesForSlot(c.data().slot()).get(0), c.species());
+                } catch (Exception e) {
+                    System.out.println("[ARENA] No se pudo usar la cápsula " + c.id() + ": " + e.getMessage());
+                }
+            }
+        }
+
+        ArenaFighter[] cpu = new ArenaFighter[2];
+        for (int i = 0; i < (partner == null ? 3 : 2); i++) {
+            Optional<DimVPetData> card = rivalCard();
+            if (card.isEmpty()) return;
+            int slot = engine.pickOpponentSlot(card.get(), myStage, -1);
+            Digidex.seen(card.get().getSpritesForSlot(slot).get(0), null);
+            if (i < 2) {
+                cpu[i] = ArenaFighter.fromDim(card.get(), slot, "Rival " + (i + 1), false, config);
+            } else {
+                partner = ArenaFighter.fromDim(card.get(), slot, "Compañero", true, config);
+            }
+        }
+        ArenaFighter[] team = {me, partner};
+
+        // Por el portal entra el PUESTO 1 y, si su compañero es el puesto 2 del escritorio, este
+        // lo sigue por detrás y cruza el MISMO portal (pedido del usuario); al final salen los dos
+        // por el mismo portal.
+        DigimonInstance leader = first.away ? this : first;
+        DigimonInstance follower = fighters.size() >= 2 && fighters.get(1) != leader
+                && !fighters.get(1).away && !fighters.get(1).teleporting ? fighters.get(1) : null;
+        TeleportAnimator teleport = new TeleportAnimator();
+        if (follower != null) teleport.keepPortalOpen();
+
+        double leaderX = leader.stage.getX(), leaderY = leader.stage.getY();
+        leader.companion.setMenuOpen(true);
+        leader.animationPlayer.stop();
+        leader.away = true;
+        if (follower != null) follower.startFollowing(leader);
+
+        Runnable openArena = () -> new ArenaScreen(new ArenaEngine(config, new java.util.Random(), team, cpu)).open(won -> {
+            if (follower != null) teleport.keepPortalOpen(); // salen los dos por el mismo portal
+            leader.comeBack(() -> leader.exitPortal(teleport, leader.animationPlayer.getSpriteSet(), leaderX, leaderY, () -> {
+                leader.animationPlayer.play(VPetAnimations.idle(leader.currentStage), 2.0);
+                leader.companion.setMenuOpen(false);
+                if (follower != null) follower.leaveArenaThrough(teleport);
+                if (won == null) return; // cerró la ventana a media pelea
+                BattleHistory.add(leader.displayName + " + " + team[1].name, "ARENA 2 vs 2",
+                        "rivales " + LabWindow.stageName(cpu[0].stage) + " y " + LabWindow.stageName(cpu[1].stage),
+                        won ? "Victoria" : "Derrota", "no cuenta");
+                if (won) leader.companion.victoryAction();
+                else leader.companion.loseAction();
+                leader.reactOnly(won ? VitalRewards.BattleOutcome.WIN : VitalRewards.BattleOutcome.LOSS, "arena");
+            }));
+        });
+        leader.enterPortal(teleport, leader.animationPlayer.getSpriteSet(), () -> {
+            if (follower == null) openArena.run();
+            else follower.followIntoPortal(teleport, openArena);
+        });
+    }
+
+    /**
+     * ARENA local: el compañero (puesto 2) deja de pasear y camina detrás del
+     * principal, hacia el centro de la pantalla donde se abrirá el portal.
+     */
+    private void startFollowing(DigimonInstance leader) {
+        companion.setMenuOpen(true);
+        clickToMove.cancel();
+        teleporting = true; // camino al portal: el clic no lo desvía
+        away = true;
+        inArena = true;
+        arenaReturnX = stage.getX();
+        arenaReturnY = stage.getY();
+        double center = TeleportAnimator.centerX();
+        double fromSide = Math.signum(leader.stage.getX() - center);
+        if (fromSide == 0) fromSide = -1;
+        // Se queda del lado por donde viene el principal, un poco más atrás.
+        movementController.walkTo(center + fromSide * 110, TeleportAnimator.bottomY());
+    }
+
+    /** Cruza el portal que dejó abierto el principal (deja de caminar primero: nunca dos animaciones a la vez). */
+    private void followIntoPortal(TeleportAnimator teleport, Runnable onEntered) {
+        movementController.stopMovement();
+        clickToMove.cancel();
+        animationPlayer.stop();
+        teleporting = true;
+        teleport.playFollowIntoOpenPortal(imageView, stage, animationPlayer.getSpriteSet(), () -> {
+            teleporting = false;
+            onEntered.run();
+        });
+    }
+
+    /** ARENA local terminada: sale detrás del principal por el mismo portal (que se cierra tras él). */
+    private void leaveArenaThrough(TeleportAnimator teleport) {
+        inArena = false;
+        comeBack(() -> {
+            clickToMove.cancel();
+            teleporting = true;
+            teleport.playExitThroughOpenPortal(imageView, stage, animationPlayer.getSpriteSet(), () -> {
+                teleporting = false;
+                backOnDesktop();
+            });
+        });
+    }
+
+    /**
+     * ARENA online (pedido del usuario): el puesto 1 ya está en la sala; el
+     * puesto 2, que está en el escritorio, cruza su propio portal antes de que
+     * empiece la pelea. {@code onEntered} = empezar la pelea.
+     */
+    public void goToArena(Runnable onEntered) {
+        if (away || teleporting) {
+            onEntered.run();
+            return;
+        }
+        companion.setMenuOpen(true);
+        arenaReturnX = stage.getX();
+        arenaReturnY = stage.getY();
+        away = true;
+        inArena = true;
+        enterPortal(new TeleportAnimator(), animationPlayer.getSpriteSet(), onEntered);
+    }
+
+    /** Terminó la ARENA online: solo el puesto 2 sale de su portal al escritorio, a donde estaba. */
+    public void returnFromArena() {
+        if (!inArena) return;
+        inArena = false;
+        comeBack(() -> exitPortal(new TeleportAnimator(), animationPlayer.getSpriteSet(), arenaReturnX, arenaReturnY,
+                this::backOnDesktop));
+    }
+
+    public boolean isInArena() { return inArena; }
 
     // ---------- VS Online ----------
 
@@ -430,37 +737,143 @@ public class DigimonInstance {
      * Servidor, puerto y nombre de jugador: Ajustes (assistant.properties).
      */
     private void vsOnlineAction() {
+        if (LobbyWindow.isAnyOpen()) return;
+        // A la sala entra SIEMPRE el puesto 1 (es quien te sigue ahí), aunque el menú sea del puesto 2.
+        DigimonInstance first = registry.primary().orElse(this);
+        if (first != this) {
+            if (first.away) {
+                aiController.announce(first.getDisplayName() + " (puesto 1) todavía no vuelve; espera a que regrese para entrar a la sala.");
+                return;
+            }
+            first.vsOnlineAction();
+            return;
+        }
+
         companion.setMenuOpen(true);
         animationPlayer.stop();
-
-        double originalX = stage.getX();
-        double originalY = stage.getY();
-        TeleportAnimator teleport = new TeleportAnimator();
         DimSpriteSet currentSprites = animationPlayer.getSpriteSet();
 
-        teleport.playEnter(imageView, stage, currentSprites, currentStage, () -> {
-            // Especie leída del sprite NAME; si aún no se pudo, "Digimon" (nunca el nombre del archivo).
-            String species = recognizedSpecies != null ? recognizedSpecies : "Digimon";
-            JSONObject myDigimon = LobbyDigimon.payloadFrom(dimData.getVsData(), species);
-
+        lobbyReturnX = stage.getX();
+        lobbyReturnY = stage.getY();
+        away = true;
+        inLobby = true;
+        enterPortal(new TeleportAnimator(), currentSprites, () -> {
+            // En la sala va TU EQUIPO: el puesto 1 te sigue y pelea las batallas tipo VB; el
+            // puesto 2 viaja como compañero para el 2 vs 2. Se reenvía si lo cambias en la PC.
+            // Al cerrar vuelve QUIEN ESTÉ en la sala en ese momento (pudo cambiar desde la PC).
             LobbyWindow lobby = new LobbyWindow(new Stage(), AssistantSettings.onlineHost(), AssistantSettings.onlinePort(),
-                    AssistantSettings.playerName(), 0, myDigimon, "VS Online - " + displayName,
-                    () -> teleport.playExit(imageView, stage, animationPlayer.getSpriteSet(), originalX, originalY, () -> {
-                        animationPlayer.play(VPetAnimations.idle(currentStage), 2.0);
-                        companion.setMenuOpen(false);
-                    }));
-            // Cada Batalla Oficial suma o resta Vital Values según la etapa del rival
-            // (VitalRewards) y el Digimon la comenta; el saldo viaja al VB al retirarlo.
-            lobby.setOnBattleResult(r -> {
-                VitalRewards.BattleOutcome outcome = switch (r.outcome()) {
-                    case "WIN" -> VitalRewards.BattleOutcome.WIN;
-                    case "LOSS" -> VitalRewards.BattleOutcome.LOSS;
-                    default -> VitalRewards.BattleOutcome.DRAW;
-                };
-                recordAndReact(outcome, r.rivalStage(), "batalla oficial online", true);
-            });
+                    AssistantSettings.playerName(), 0, teamPayload(), "VS Online - " + AssistantSettings.playerName(),
+                    () -> List.copyOf(registry.getActiveInstances()).stream()
+                            .filter(d -> d.isInLobby() && !d.teleporting).forEach(DigimonInstance::returnFromLobby));
+            lobby.setTeamSupplier(this::teamPayload);
+            // Cada Batalla Oficial cuenta para quien la peleó: el puesto 1 del momento.
+            lobby.setOnBattleResult(r -> registry.primary().orElse(this).recordOnlineBattle(r));
+            // ARENA 2 vs 2 online: tu puesto 2 (en el escritorio) cruza su portal antes de la pelea
+            // y, al terminar, solo él vuelve a salir por su portal (pedido del usuario).
+            lobby.setArenaHooks(
+                    start -> registry.secondary().filter(d -> !d.isInLobby()).ifPresentOrElse(
+                            second -> second.goToArena(start), start),
+                    () -> List.copyOf(registry.getActiveInstances()).stream()
+                            .filter(DigimonInstance::isInArena).forEach(DigimonInstance::returnFromArena));
             lobby.open();
         });
+    }
+
+    /** Sale de la sala y vuelve al escritorio por el portal, al lugar desde donde entró. */
+    public void returnFromLobby() {
+        leaveLobbyTo(lobbyReturnX, lobbyReturnY);
+    }
+
+    /** Sale de la sala y aparece en el escritorio por un portal nuevo, caminando hacia (x, y). */
+    private void leaveLobbyTo(double x, double y) {
+        if (!inLobby) return;
+        inLobby = false;
+        comeBack(() -> exitPortal(new TeleportAnimator(), animationPlayer.getSpriteSet(), x, y, this::backOnDesktop));
+    }
+
+    /**
+     * Intercambio de puestos 1 ⇄ 2 con la sala abierta: sale de la sala por
+     * el portal del escritorio que dejó ABIERTO el otro al entrar (el portal
+     * no se cierra ni aparece en otro lado). Si ya no estaba en la sala, solo
+     * se cierra ese portal.
+     */
+    public void leaveLobbyThrough(TeleportAnimator openPortal) {
+        if (!inLobby) {
+            openPortal.closeOpenPortal(null);
+            return;
+        }
+        inLobby = false;
+        comeBack(() -> {
+            clickToMove.cancel();
+            teleporting = true;
+            openPortal.playExitThroughOpenPortal(imageView, stage, animationPlayer.getSpriteSet(), () -> {
+                teleporting = false;
+                backOnDesktop();
+            });
+        });
+    }
+
+    private void backOnDesktop() {
+        animationPlayer.play(VPetAnimations.idle(currentStage), 2.0);
+        companion.start(); // si llegó directo a la sala, todavía no paseaba
+        companion.setMenuOpen(false);
+    }
+
+    /**
+     * Del escritorio a la sala (intercambio de puestos con la sala abierta):
+     * entra a un portal que QUEDA ABIERTO y, cuando desaparece,
+     * {@code onEntered} recibe ese portal para que el otro salga por él.
+     */
+    public void goToLobby(Consumer<TeleportAnimator> onEntered) {
+        companion.setMenuOpen(true);
+        lobbyReturnX = stage.getX();
+        lobbyReturnY = stage.getY();
+        away = true;
+        inLobby = true;
+        TeleportAnimator portal = new TeleportAnimator().keepPortalOpen();
+        enterPortal(portal, animationPlayer.getSpriteSet(), () -> onEntered.accept(portal));
+    }
+
+    /** Llega DIRECTO a la sala (reemplazo del puesto 1 desde la PC): no aparece en el escritorio. */
+    public void setSpawnIntoLobby(boolean spawnIntoLobby) {
+        this.spawnIntoLobby = spawnIntoLobby;
+    }
+
+    public boolean isInLobby() { return inLobby; }
+
+    /** Mensaje "digimon" con el equipo actual: puesto 1 + puesto 2 (si hay) como compañero. */
+    private JSONObject teamPayload() {
+        DigimonInstance first = registry.primary().orElse(this);
+        DigimonInstance second = registry.secondary().orElse(null);
+        return LobbyDigimon.teamPayload(first.getDimData().getVsData(), first.speciesForOnline(),
+                second == null ? null : second.getDimData().getVsData(),
+                second == null ? null : second.speciesForOnline());
+    }
+
+    /** Especie para el VS Online: la leída del sprite NAME (o escrita), nunca el nombre del archivo. */
+    public String speciesForOnline() {
+        return recognizedSpecies != null ? recognizedSpecies : "Digimon";
+    }
+
+    /**
+     * Resultado de una pelea del VS Online. Las Batallas Oficiales (Libre u
+     * Original) suman o restan Vital Values y viajan al VB al retirar; la
+     * ARENA 2 vs 2 online, como la local, NO cuenta (solo historial y comentario).
+     */
+    public void recordOnlineBattle(OfficialBattleResult r) {
+        VitalRewards.BattleOutcome outcome = switch (r.outcome()) {
+            case "WIN" -> VitalRewards.BattleOutcome.WIN;
+            case "LOSS" -> VitalRewards.BattleOutcome.LOSS;
+            default -> VitalRewards.BattleOutcome.DRAW;
+        };
+        if (Protocol.MODE_ARENA.equals(r.mode())) {
+            BattleHistory.add(displayName + " + compañero", "ARENA 2 vs 2 online", "rival " + LabWindow.stageName(r.rivalStage()),
+                    resultName(outcome), "no cuenta");
+            if (outcome != VitalRewards.BattleOutcome.DRAW) reactOnly(outcome, "arena online");
+            return;
+        }
+        recordAndReact(outcome, r.rivalStage(), "batalla oficial online", true,
+                "Oficial (" + (Protocol.MODE_ORIGINAL.equals(r.mode()) ? "Original" : "Libre") + ")");
     }
 
     private Image nativeNameImage(DimVPetData card, int slot) {
@@ -470,15 +883,38 @@ public class DigimonInstance {
     private void applyBattleResult(BattleEngine.BattleResult result, int rivalStage) {
         VitalRewards.BattleOutcome outcome = result.draw ? VitalRewards.BattleOutcome.DRAW
                 : result.won ? VitalRewards.BattleOutcome.WIN : VitalRewards.BattleOutcome.LOSS;
-        recordAndReact(outcome, rivalStage, "combate", false);
+        recordAndReact(outcome, rivalStage, "combate", false, "Aleatoria");
     }
 
     /**
      * Suma la batalla al récord (Vital Values por etapa del rival) y el
      * Digimon la comenta: con la IA en 0.0.3, con un texto fijo en 0.0.3.1.
      */
-    private void recordAndReact(VitalRewards.BattleOutcome outcome, int rivalStage, String detail, boolean important) {
+    private static String resultName(VitalRewards.BattleOutcome outcome) {
+        return switch (outcome) {
+            case WIN -> "Victoria";
+            case LOSS -> "Derrota";
+            case DRAW -> "Empate";
+        };
+    }
+
+    /** Solo el comentario del Digimon, sin tocar el récord (la ARENA no cuenta). */
+    private void reactOnly(VitalRewards.BattleOutcome outcome, String detail) {
+        if (Edition.ASSISTANT) {
+            aiController.onGameEvent(new VPetEvent(outcome == VitalRewards.BattleOutcome.WIN
+                    ? VPetEvent.Type.VICTORIA : VPetEvent.Type.DERROTA, detail, false));
+            return;
+        }
+        aiController.announce(outcome == VitalRewards.BattleOutcome.WIN
+                ? "¡Ganamos en la ARENA!" : "Perdimos en la ARENA... ¡la próxima!");
+    }
+
+    private void recordAndReact(VitalRewards.BattleOutcome outcome, int rivalStage, String detail, boolean important,
+                                String historyMode) {
         int delta = progress.recordBattle(outcome, rivalStage, VitalRewards.load());
+        if (capsuleId != null) LabStorage.saveProgress(capsuleId, progress.toProperties());
+        BattleHistory.add(displayName, historyMode, "rival " + LabWindow.stageName(rivalStage), resultName(outcome),
+                String.format("%+d (estimado)", delta));
         if (Edition.ASSISTANT) {
             if (outcome == VitalRewards.BattleOutcome.WIN) {
                 aiController.onGameEvent(new VPetEvent(VPetEvent.Type.VICTORIA, detail, important));
@@ -499,11 +935,13 @@ public class DigimonInstance {
 
     /**
      * Pedido del usuario: el Digimon se despide con el saldo de TODAS sus
-     * batallas (aleatorias y oficiales). Se escribe una VS DIM nueva a partir
-     * de la original con los Vital Values sumados o restados (VsDimWriter):
-     * saldo positivo = vuelve ganando, negativo = vuelve perdiendo. Después se
-     * va por un portal, se abre la carpeta con el archivo para pasarlo al VB y
-     * vuelve la pantalla de inicio.
+     * batallas (aleatorias y oficiales), resumido en UN reporte de batalla
+     * dentro de una VS DIM nueva hecha desde la original (VsDimWriter), igual
+     * al que escribe un VB rival: saldo positivo = victoria contra el rival
+     * más fuerte que venció, negativo = derrota contra el más fuerte que lo
+     * venció, sin saldo = copia sin reporte. El VB calcula los Vital Values
+     * reales al leerlo. Después se va por un portal, se abre la carpeta con
+     * el archivo para pasarlo al VB y vuelve la pantalla de inicio.
      */
     private void retireAction() {
         if (retiring) return;
@@ -511,15 +949,13 @@ public class DigimonInstance {
         int before = progress.getImportedVitalValues();
         int after = progress.getVitalValues(rewards);
         int change = after - before;
+        Optional<DigimonProgress.BattleReport> report = progress.battleReport();
 
-        String verdict;
-        if (progress.getBattles() == 0) verdict = "No peleó: vuelve igual que llegó.";
-        else if (change > 0) verdict = "Saldo POSITIVO: vuelve al Vital Bracelet como VICTORIA.";
-        else if (change < 0) verdict = "Saldo NEGATIVO: vuelve al Vital Bracelet como DERROTA.";
-        else verdict = "Saldo en cero: vuelve igual que llegó.";
-        if (after != before + progress.getVitalDelta()) {
-            verdict += "\n(Los Vital Values quedan entre 0 y " + rewards.maxVitalValues + ".)";
-        }
+        String verdict = report.map(r -> (r.won()
+                        ? "Saldo POSITIVO: vuelve como VICTORIA contra un rival " : "Saldo NEGATIVO: vuelve como DERROTA contra un rival ")
+                        + stageName(r.rivalStage()) + ".")
+                .orElse(progress.getBattles() == 0 ? "No peleó: vuelve igual que llegó."
+                        : "Saldo en cero: vuelve igual que llegó.");
 
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
         confirm.initOwner(stage);
@@ -527,14 +963,19 @@ public class DigimonInstance {
         confirm.setHeaderText("¿Retirar a " + displayName + " y devolverlo al Vital Bracelet?");
         confirm.setContentText("Batallas: " + progress.getBattles() + "  (" + progress.getWins() + " ganadas, "
                 + progress.getLosses() + " perdidas, " + progress.getDraws() + " empates)\n"
-                + "Vital Values: " + before + " → " + after + "  (" + String.format("%+d", change) + ")\n\n"
-                + verdict + "\n\nSe creará una VS DIM nueva para pasarla al Vital Bracelet. "
-                + "La original no se toca. El Digimon se irá del escritorio.");
+                + "Saldo estimado: " + String.format("%+d", change) + " Vital Values\n\n"
+                + verdict + "\n\nEl Vital Bracelet calcula los Vital Values reales al recibirlo. "
+                + "Se creará una VS DIM nueva; la original no se toca. Usa una VS DIM recién "
+                + "extraída del VB. El Digimon se irá del escritorio.");
         if (confirm.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
 
-        Path target = AppPaths.returns().resolve(returnFileName(change));
+        Path target = AppPaths.returns().resolve(returnFileName(report));
         try {
-            VsDimWriter.writeWithVitalValues(sourceBinPath, target, after);
+            if (report.isPresent()) {
+                VsDimWriter.writeBattleReport(sourceBinPath, target, report.get().rivalStage(), report.get().won());
+            } else {
+                VsDimWriter.copyUnchanged(sourceBinPath, target);
+            }
         } catch (IOException e) {
             Alert error = new Alert(Alert.AlertType.ERROR, "No se pudo crear la VS DIM de vuelta:\n" + e.getMessage());
             error.initOwner(stage);
@@ -542,13 +983,16 @@ public class DigimonInstance {
             error.showAndWait();
             return;
         }
-        System.out.println("[RETIRO] " + displayName + ": " + before + " -> " + after + " VV en " + target);
+        System.out.println("[RETIRO] " + displayName + ": " + report.map(r -> (r.won() ? "victoria" : "derrota")
+                + " contra etapa " + r.rivalStage()).orElse("sin reporte") + " en " + target);
 
+        // El saldo ya viaja al VB en el reporte: la cápsula empieza de cero.
+        if (capsuleId != null) LabStorage.resetProgress(capsuleId);
         retiring = true;
         companion.setMenuOpen(true);
         stopAll();
         animationPlayer.stop();
-        new TeleportAnimator().playEnter(imageView, stage, animationPlayer.getSpriteSet(), currentStage, () -> {
+        enterPortal(new TeleportAnimator(), animationPlayer.getSpriteSet(), () -> {
             showInExplorer(target);
             // Primero la pantalla de inicio y DESPUÉS se cierra esta ventana: si no quedara
             // ninguna ventana abierta, JavaFX cerraría el programa.
@@ -557,13 +1001,25 @@ public class DigimonInstance {
         });
     }
 
-    /** "VS DIM MagnaKidmon 2026-09-26 18-40 (+530 VV).bin" -- solo caracteres válidos en Windows. */
-    private String returnFileName(int change) {
+    /** "VS DIM MagnaKidmon 2026-09-28 18-40-00 (victoria vs Perfect).bin" -- solo caracteres válidos en Windows. */
+    private String returnFileName(Optional<DigimonProgress.BattleReport> report) {
         String species = recognizedSpecies != null ? recognizedSpecies : "Digimon";
         species = species.replaceAll("[^A-Za-z0-9 _-]", "").trim();
         if (species.isEmpty()) species = "Digimon";
         String when = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"));
-        return "VS DIM " + species + " " + when + " (" + String.format("%+d", change) + " VV).bin";
+        String result = report.map(r -> (r.won() ? "victoria" : "derrota") + " vs " + stageName(r.rivalStage()))
+                .orElse("sin batalla");
+        return "VS DIM " + species + " " + when + " (" + result + ").bin";
+    }
+
+    private static String stageName(int dimStage) {
+        return switch (dimStage) {
+            case 2 -> "Child";
+            case 3 -> "Adult";
+            case 4 -> "Perfect";
+            case 5 -> "Ultimate";
+            default -> "Baby";
+        };
     }
 
     /** Abre el Explorador con el archivo seleccionado (Windows); si falla, solo la carpeta. */

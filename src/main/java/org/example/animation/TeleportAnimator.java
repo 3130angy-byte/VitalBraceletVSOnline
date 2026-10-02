@@ -45,6 +45,18 @@ public class TeleportAnimator {
     private static final double FADE_ADVANCE_DISTANCE = PortalSpriteSheet.FRAME_WIDTH * 0.5;
 
     private Stage portalStage;
+    /** Ventana del Digimon: el portal siempre queda detrás de ella. */
+    private Stage petStage;
+    /** Al terminar de entrar, el portal queda abierto para que otro salga por él. */
+    private boolean keepPortalOpen = false;
+    /** Dónde quedó el portal de la entrada y hacia dónde caminaba quien entró. */
+    private double openPortalLeft, openPortalTop, openDirX;
+
+    /** La próxima entrada deja el portal abierto (ver playExitThroughOpenPortal). */
+    public TeleportAnimator keepPortalOpen() {
+        keepPortalOpen = true;
+        return this;
+    }
     private ImageView portalView;
     private PortalSpriteSheet portalSheet;
     private Timeline portalLoopTimeline;
@@ -61,6 +73,33 @@ public class TeleportAnimator {
     }
 
     public void playEnter(ImageView view, Stage petStage, DimSpriteSet sprites, VPetStageTier stageTier, Runnable onComplete) {
+        playEnter(view, petStage, sprites, stageTier, false, onComplete);
+    }
+
+    /**
+     * settleFirst: el Digimon venía caminando (o haciendo otra acción) cuando
+     * se pidió el portal. Quien llama YA detuvo ese movimiento; aquí se queda
+     * en IDLE_1/IDLE_2 IDLE_REPS veces y recién entonces se lee su posición
+     * para decidir dónde va el portal. Antes el paseo y esta animación movían
+     * la misma ventana a la vez: se deslizaba hasta la esquina y volvía (bug
+     * desde 0.0.2).
+     */
+    public void playEnter(ImageView view, Stage petStage, DimSpriteSet sprites, VPetStageTier stageTier,
+                          boolean settleFirst, Runnable onComplete) {
+        this.petStage = petStage;
+        if (!settleFirst) {
+            startEnter(view, petStage, sprites, onComplete);
+            return;
+        }
+        view.setVisible(true);
+        view.setOpacity(1.0);
+        Timeline settle = new Timeline();
+        double t = appendIdleReps(settle, view, sprites, 0);
+        settle.getKeyFrames().add(new KeyFrame(Duration.seconds(t), e -> startEnter(view, petStage, sprites, onComplete)));
+        settle.play();
+    }
+
+    private void startEnter(ImageView view, Stage petStage, DimSpriteSet sprites, Runnable onComplete) {
         view.setVisible(true);
         view.setOpacity(1.0);
         view.setScaleX(1.0);
@@ -135,6 +174,9 @@ public class TeleportAnimator {
         double entryPointX = dirX >= 0 ? portalLeft : portalLeft + portalW;
         double entryPointY = charCenterY;
 
+        openPortalLeft = portalLeft;
+        openPortalTop = portalTop;
+        openDirX = dirX;
         timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(t), e ->
                 openPortalMaterialize(portalLeft, portalTop, -dirX, () -> {
                     startPortalLoop();
@@ -234,6 +276,10 @@ public class TeleportAnimator {
         }));
 
         timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(lastStepTime + 0.02 + PORTAL_HOLD_AFTER_VANISH_SECONDS), e -> {
+            if (keepPortalOpen) { // otro Digimon saldrá por este mismo portal (playExitThroughOpenPortal)
+                if (onComplete != null) onComplete.run();
+                return;
+            }
             stopPortalLoop();
             closePortalMaterialize(onComplete);
         }));
@@ -247,6 +293,7 @@ public class TeleportAnimator {
      * antes se asumía "siempre hacia la derecha", ese era el bug.
      */
     public void playExit(ImageView view, Stage petStage, DimSpriteSet sprites, double targetX, double targetY, Runnable onComplete) {
+        this.petStage = petStage;
         double portalX = centerX();
         double portalY = bottomY();
 
@@ -264,42 +311,113 @@ public class TeleportAnimator {
         double portalLeft = portalX + CHAR_WIDTH / 2.0 - PortalSpriteSheet.FRAME_WIDTH / 2.0;
         double portalTop = portalY + CHAR_HEIGHT / 2.0 - PortalSpriteSheet.FRAME_HEIGHT / 2.0;
 
+        // Por si sale otro detrás (keepPortalOpen): sale por el lado contrario (playExitThroughOpenPortal).
+        openPortalLeft = portalLeft;
+        openPortalTop = portalTop;
+        openDirX = dirX;
         openPortalMaterialize(portalLeft, portalTop, dirX, () -> {
             startPortalLoop();
-
-            Timeline timeline = new Timeline();
-            for (int i = 0; i < OPACITY_STEPS.length; i++) {
-                double time = i * FADE_STEP_SECONDS;
-                double opacity = OPACITY_STEPS[OPACITY_STEPS.length - 1 - i];
-                SpriteRole role = (i % 2 == 0) ? SpriteRole.WALK_1 : SpriteRole.WALK_2;
-                timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(time), e -> {
-                    view.setOpacity(opacity);
-                    view.setImage(sprites.get(role));
-                }));
-            }
-            double t = OPACITY_STEPS.length * FADE_STEP_SECONDS;
-
-            int walkFrames = 4;
-            for (int i = 0; i < walkFrames; i++) {
-                double time = t + i * WALK_FRAME_SECONDS;
-                double frac = (i + 1) / (double) walkFrames;
-                SpriteRole role = (i % 2 == 0) ? SpriteRole.WALK_2 : SpriteRole.WALK_1;
-                timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(time), e -> {
-                    view.setImage(sprites.get(role));
-                    petStage.setX(portalX + dirX * FADE_ADVANCE_DISTANCE * frac);
-                    petStage.setY(portalY + dirY * FADE_ADVANCE_DISTANCE * frac);
-                }));
-            }
-            t += walkFrames * WALK_FRAME_SECONDS;
-
-            timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(t), e -> view.setImage(sprites.get(SpriteRole.IDLE_1))));
-            timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(t), e -> {
-                stopPortalLoop();
-                closePortalMaterialize(onComplete);
-            }));
-
-            timeline.play();
+            emergeAndClose(view, petStage, sprites, portalX, portalY, dirX, dirY, onComplete);
         });
+    }
+
+    /**
+     * Un SEGUNDO Digimon entra por el portal que dejó abierto el primero
+     * (keepPortalOpen; ARENA 2 vs 2 local: el compañero sigue al principal):
+     * camina desde donde esté hasta la misma entrada, entra desvaneciéndose en
+     * la misma dirección y recién entonces el portal se cierra.
+     */
+    public void playFollowIntoOpenPortal(ImageView view, Stage petStage, DimSpriteSet sprites, Runnable onComplete) {
+        if (portalStage == null || !portalStage.isShowing()) {
+            playEnter(view, petStage, sprites, null, onComplete); // no quedó portal: abre el suyo
+            return;
+        }
+        this.petStage = petStage;
+        keepPortalOpen = false; // detrás de este ya no entra nadie: el portal se cierra
+        keepPetInFront();
+        view.setVisible(true);
+        view.setOpacity(1.0);
+        double dirX = openDirX >= 0 ? 1 : -1;
+        double entryX = dirX >= 0 ? openPortalLeft : openPortalLeft + PortalSpriteSheet.FRAME_WIDTH;
+        double entryY = openPortalTop + PortalSpriteSheet.FRAME_HEIGHT / 2.0;
+        walkToEntryPoint(view, petStage, sprites, entryX, entryY, dirX, 0, onComplete);
+    }
+
+    /**
+     * Sale por el portal que dejó ABIERTO otro Digimon al entrar
+     * (keepPortalOpen, intercambio de puestos con la sala online): el portal
+     * no se cierra ni se vuelve a abrir en otro lado. Sale hacia el lado por
+     * donde llegó el otro.
+     */
+    public void playExitThroughOpenPortal(ImageView view, Stage petStage, DimSpriteSet sprites, Runnable onComplete) {
+        if (portalStage == null || !portalStage.isShowing()) {
+            playExit(view, petStage, sprites, petStage.getX(), petStage.getY(), onComplete);
+            return;
+        }
+        this.petStage = petStage;
+        keepPortalOpen = false; // es el último en salir: el portal se cierra detrás de él
+        double dirX = openDirX >= 0 ? -1 : 1;
+        double portalX = openPortalLeft + PortalSpriteSheet.FRAME_WIDTH / 2.0 - CHAR_WIDTH / 2.0;
+        double portalY = openPortalTop + PortalSpriteSheet.FRAME_HEIGHT / 2.0 - CHAR_HEIGHT / 2.0;
+        petStage.setX(portalX);
+        petStage.setY(portalY);
+        view.setVisible(true);
+        view.setOpacity(0.0);
+        view.setImage(sprites.get(SpriteRole.WALK_1));
+        applyFacing(view, dirX);
+        keepPetInFront();
+        emergeAndClose(view, petStage, sprites, portalX, portalY, dirX, 0, onComplete);
+    }
+
+    /** Si quien entró dejó el portal abierto y nadie sale por él, se cierra. */
+    public void closeOpenPortal(Runnable onClosed) {
+        if (portalStage == null || !portalStage.isShowing()) {
+            if (onClosed != null) onClosed.run();
+            return;
+        }
+        stopPortalLoop();
+        closePortalMaterialize(onClosed);
+    }
+
+    /** Aparece (desvanecido al revés) desde el centro del portal, da unos pasos y el portal se cierra. */
+    private void emergeAndClose(ImageView view, Stage petStage, DimSpriteSet sprites, double portalX, double portalY,
+                                double dirX, double dirY, Runnable onComplete) {
+        Timeline timeline = new Timeline();
+        for (int i = 0; i < OPACITY_STEPS.length; i++) {
+            double time = i * FADE_STEP_SECONDS;
+            double opacity = OPACITY_STEPS[OPACITY_STEPS.length - 1 - i];
+            SpriteRole role = (i % 2 == 0) ? SpriteRole.WALK_1 : SpriteRole.WALK_2;
+            timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(time), e -> {
+                view.setOpacity(opacity);
+                view.setImage(sprites.get(role));
+            }));
+        }
+        double t = OPACITY_STEPS.length * FADE_STEP_SECONDS;
+
+        int walkFrames = 4;
+        for (int i = 0; i < walkFrames; i++) {
+            double time = t + i * WALK_FRAME_SECONDS;
+            double frac = (i + 1) / (double) walkFrames;
+            SpriteRole role = (i % 2 == 0) ? SpriteRole.WALK_2 : SpriteRole.WALK_1;
+            timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(time), e -> {
+                view.setImage(sprites.get(role));
+                petStage.setX(portalX + dirX * FADE_ADVANCE_DISTANCE * frac);
+                petStage.setY(portalY + dirY * FADE_ADVANCE_DISTANCE * frac);
+            }));
+        }
+        t += walkFrames * WALK_FRAME_SECONDS;
+
+        timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(t), e -> view.setImage(sprites.get(SpriteRole.IDLE_1))));
+        timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(t), e -> {
+            if (keepPortalOpen) { // sale otro detrás por este mismo portal (playExitThroughOpenPortal)
+                if (onComplete != null) onComplete.run();
+                return;
+            }
+            stopPortalLoop();
+            closePortalMaterialize(onComplete);
+        }));
+
+        timeline.play();
     }
 
     // ---------- utilitarios ----------
@@ -322,6 +440,7 @@ public class TeleportAnimator {
         portalStage.setX(left);
         portalStage.setY(top);
         portalStage.show();
+        keepPetInFront();
 
         Timeline t = new Timeline();
         for (int i = 0; i < PortalSpriteSheet.MATERIALIZE_FRAMES; i++) {
@@ -331,6 +450,15 @@ public class TeleportAnimator {
         }
         t.setOnFinished(e -> { if (onMaterializeComplete != null) onMaterializeComplete.run(); });
         t.play();
+    }
+
+    /**
+     * El portal va DETRÁS del Digimon (pedido del usuario). Ambas ventanas
+     * son "siempre encima", así que manda la última que pasó al frente: el
+     * portal se muestra después, y por eso se vuelve a traer al Digimon.
+     */
+    private void keepPetInFront() {
+        if (petStage != null && petStage.isShowing()) petStage.toFront();
     }
 
     private void startPortalLoop() {

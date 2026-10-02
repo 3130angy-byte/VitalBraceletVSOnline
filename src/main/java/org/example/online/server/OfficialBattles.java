@@ -41,6 +41,8 @@ final class OfficialBattles {
     private final BattleEngine engine = new BattleEngine();
     private final Map<Integer, Challenge> byChallenger = new HashMap<>();
     private final Map<Integer, Challenge> byTarget = new HashMap<>();
+    /** ARENA 2 vs 2 online en curso, por id de jugador (sin el candado de esta clase: ver OnlineArenaMatch). */
+    private final Map<Integer, OnlineArenaMatch> arenas = new java.util.concurrent.ConcurrentHashMap<>();
     private final ScheduledExecutorService timers = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "vs-retos");
         t.setDaemon(true);
@@ -82,6 +84,10 @@ final class OfficialBattles {
         String problem = cannotBattle(from);
         if (problem == null && !Protocol.isValidMode(mode)) problem = "Modo de batalla desconocido.";
         ClientConnection target = server.player(targetId);
+        if (problem == null && Protocol.MODE_ARENA.equals(mode)) {
+            problem = OnlineArenaMatch.teamProblem(from);
+            if (problem == null && target != null) problem = OnlineArenaMatch.teamProblem(target);
+        }
         if (problem == null) {
             if (target == null || target == from) problem = "Ese jugador ya no está en la sala.";
             else if (!target.available) problem = target.name + " ya no está disponible.";
@@ -124,7 +130,41 @@ final class OfficialBattles {
             VsServer.log(target.name + " rechazó el reto de " + from.name + ".");
             return;
         }
+        if (Protocol.MODE_ARENA.equals(ch.mode())) {
+            OnlineArenaMatch match = new OnlineArenaMatch(this, from, target, timers);
+            arenas.put(from.id, match);
+            arenas.put(target.id, match);
+            match.start();
+            return;
+        }
         runBattle(from, target, ch.mode());
+    }
+
+    // ---------------------------------------------------------------- ARENA 2 vs 2 online
+
+    void arenaAction(ClientConnection c, String action) {
+        OnlineArenaMatch m = arenas.get(c.id);
+        if (m != null) m.onAction(c, action);
+    }
+
+    void arenaCombo(ClientConnection c, int combo) {
+        OnlineArenaMatch m = arenas.get(c.id);
+        if (m != null) m.onCombo(c, combo);
+    }
+
+    void arenaDefense(ClientConnection c, double distance, boolean protect) {
+        OnlineArenaMatch m = arenas.get(c.id);
+        if (m != null) m.onDefense(c, distance, protect);
+    }
+
+    /** Terminó una ARENA: se suelta la partida; cada uno queda libre al avisar battleDone (o a los 90 s). */
+    void arenaFinished(OnlineArenaMatch match, ClientConnection a, ClientConnection b) {
+        arenas.remove(a.id, match);
+        arenas.remove(b.id, match);
+        timers.schedule(() -> {
+            a.inBattle = false;
+            b.inBattle = false;
+        }, BATTLE_SAFETY_SECONDS, TimeUnit.SECONDS);
     }
 
     private synchronized void expire(int fromId, int toId) {
@@ -138,6 +178,8 @@ final class OfficialBattles {
 
     synchronized void onLeave(ClientConnection c) {
         c.available = false;
+        OnlineArenaMatch arena = arenas.get(c.id);
+        if (arena != null) arena.onLeave(c);
         Challenge asChallenger = byChallenger.get(c.id);
         Challenge asTarget = byTarget.get(c.id);
         if (asChallenger != null) {
@@ -219,6 +261,11 @@ final class OfficialBattles {
         if (c.digimon == null || c.stats == null) return "Necesitas traer a tu Digimon para pelear.";
         if (c.stage < Protocol.MIN_BATTLE_STAGE) return "Solo pelean Digimon de etapa Child o superior.";
         return null;
+    }
+
+    /** Peleando o con un reto pendiente: no puede cambiar su equipo. */
+    synchronized boolean isBusy(ClientConnection c) {
+        return c.inBattle || involved(c.id) || arenas.containsKey(c.id);
     }
 
     private boolean involved(int id) {

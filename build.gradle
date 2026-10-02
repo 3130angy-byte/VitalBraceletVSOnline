@@ -69,18 +69,16 @@ tasks.register('runClient', JavaExec) {
     jvmArgs '-Dfile.encoding=UTF-8'
 }
 // ============================================================
-// 0.0.3.1 -- versión para probadores del VS Online (sin asistente ni chat IA)
-//   .\gradlew.bat runTester        prueba la edición 0.0.3.1 desde el código
-//   .\gradlew.bat packageTester    arma el paquete con Java incluido (jpackage)
-//                                  en ..\DIGIMON-ASSISTANT 0.0.3.1\ + un .zip
-// Mismo código que 0.0.3: solo cambia -Ddigimon.edicion=tester (ver Edition).
-// -Ddigimon.servidor = servidor por defecto de los probadores (la IP de
-// Tailscale del anfitrión): propiedad servidorProbadores en
-// ~/.gradle/gradle.properties (fuera del repo) o -PservidorProbadores=100.x.x.x
+// Paquetes listos para compartir (jpackage, Java incluido), mismo código:
+//   0.0.3.1  -- la de los PROBADORES: sin asistente ni chat IA
+//              (-Ddigimon.edicion=tester).            .\gradlew.bat packageTester
+//   .\gradlew.bat runTester    prueba la 0.0.3.1 desde el código
+// Queda en ..\DIGIMON-ASSISTANT <versión>\ (carpeta + .zip).
+// El servidor viene como "100.x" (decisión del usuario): cada probador escribe
+// la IP que le pase el anfitrión; si no escribe una válida, el juego arranca igual
+// (funciones locales) y la sala avisa que no pudo conectar.
 // ============================================================
-def testerHost = project.findProperty('servidorProbadores') ?: '127.0.0.1'
-def testerOut = file("${projectDir}/../DIGIMON-ASSISTANT 0.0.3.1")
-def testerName = 'DigimonVS-0.0.3.1'
+def testerHost = '100.x'
 
 tasks.register('runTester', JavaExec) {
     group = 'vs online'
@@ -90,11 +88,65 @@ tasks.register('runTester', JavaExec) {
     jvmArgs '-Dfile.encoding=UTF-8', '-Ddigimon.edicion=tester', "-Ddigimon.servidor=${testerHost}"
 }
 
+// El jar de 0.0.3.1 NO lleva la pestaña ACCESO (exclusiva del anfitrión, decisión del usuario).
+tasks.register('testerJar', Jar) {
+    archiveClassifier = 'tester'
+    from sourceSets.main.output
+    exclude 'org/example/lab/AccessTab*'
+    manifest { attributes 'Main-Class': 'org.example.Launcher' }
+}
+
 tasks.register('testerInput', Sync) {
-    dependsOn jar
-    from jar
+    dependsOn 'testerJar'
+    from tasks.named('testerJar')
     from configurations.runtimeClasspath
-    into layout.buildDirectory.dir('tester/input')
+    into layout.buildDirectory.dir('package/tester-input')
+}
+
+/** Arma una edición: app-image con jpackage, copia a ..\<outFolder>\ y un .zip. */
+def buildPackage = { String appName, String outFolder, List<String> javaOptions, File readme,
+                     File input, String mainJar, boolean withServer ->
+    def jdk = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(17) }.get().metadata.installationPath
+    def jpackage = jdk.file('bin/jpackage.exe').asFile
+    def work = layout.buildDirectory.dir("package/${appName}").get().asFile
+    def image = new File(work, 'image')
+    ant.delete(dir: image, failonerror: false)
+    work.mkdirs()
+
+    def cmd = [jpackage.absolutePath, '--type', 'app-image',
+               '--name', appName,
+               '--input', input,
+               '--main-jar', mainJar,
+               '--main-class', 'org.example.Launcher',
+               '--java-options', '-Dfile.encoding=UTF-8']
+    javaOptions.each { cmd += ['--java-options', it] }
+    if (withServer) {
+        // Segundo ejecutable: el servidor, con consola (apagar / jugadores / expulsar).
+        def serverProps = new File(work, 'servidor.properties')
+        serverProps.text = 'main-class=org.example.online.server.VsServer\n' +
+                'win-console=true\n' +
+                'java-options=-Dfile.encoding=UTF-8\n'
+        cmd += ['--add-launcher', "Servidor VS Online=${serverProps}"]
+    }
+    cmd += ['--app-version', '0.0.3', '--vendor', 'Digimon Project', '--dest', image]
+    def proc = new ProcessBuilder(cmd.collect { it.toString() }).inheritIO().start()
+    if (proc.waitFor() != 0) throw new GradleException("jpackage falló (código ${proc.exitValue()})")
+
+    def out = file("${projectDir}/../${outFolder}")
+    out.mkdirs()
+    ant.delete(dir: new File(out, appName), failonerror: false)
+    ant.delete(file: new File(out, "${appName}.zip"), failonerror: false)
+    ant.copy(todir: out) { fileset(dir: image) }
+    ant.copy(file: readme, todir: out)
+    ant.copy(file: file("LICENSE"), todir: out)
+    ant.copy(file: file("THIRD-PARTY-NOTICES.md"), todir: out)
+    ant.zip(destfile: new File(out, "${appName}.zip")) {
+        fileset(dir: image)
+        fileset(file: readme)
+        fileset(file: file("LICENSE"))
+        fileset(file: file("THIRD-PARTY-NOTICES.md"))
+    }
+    println "Listo: ${out}"
 }
 
 tasks.register('packageTester') {
@@ -102,47 +154,10 @@ tasks.register('packageTester') {
     description = 'Arma 0.0.3.1 para probadores: carpeta con Java incluido y un .zip listo para compartir.'
     dependsOn 'testerInput'
     doLast {
-        def jdk = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(17) }.get().metadata.installationPath
-        def jpackage = jdk.file('bin/jpackage.exe').asFile
-        def input = layout.buildDirectory.dir('tester/input').get().asFile
-        def work = layout.buildDirectory.dir('tester').get().asFile
-        def image = new File(work, 'image')
-        ant.delete(dir: image, failonerror: false)
-
-        // Segundo ejecutable: el servidor, con consola (apagar / jugadores / expulsar).
-        def serverProps = new File(work, 'servidor.properties')
-        serverProps.text = 'main-class=org.example.online.server.VsServer\n' +
-                'win-console=true\n' +
-                'java-options=-Dfile.encoding=UTF-8\n'
-
-        def cmd = [jpackage.absolutePath, '--type', 'app-image',
-                    '--name', testerName,
-                    '--input', input,
-                    '--main-jar', jar.archiveFileName.get(),
-                    '--main-class', 'org.example.Launcher',
-                    '--java-options', '-Dfile.encoding=UTF-8',
-                    '--java-options', '-Ddigimon.edicion=tester',
-                    '--java-options', "-Ddigimon.servidor=${testerHost}",
-                    '--add-launcher', "Servidor VS Online=${serverProps}",
-                    '--app-version', '0.0.3',
-                    '--vendor', 'Digimon Project',
-                    '--dest', image].collect { it.toString() }
-        def proc = new ProcessBuilder(cmd).inheritIO().start()
-        if (proc.waitFor() != 0) throw new GradleException("jpackage falló (código ${proc.exitValue()})")
-
-        testerOut.mkdirs()
-        ant.delete(dir: new File(testerOut, testerName), failonerror: false)
-        ant.delete(file: new File(testerOut, "${testerName}.zip"), failonerror: false)
-        ant.copy(todir: testerOut) { fileset(dir: image) }
-        ant.copy(file: file("tester/LEEME.txt"), todir: testerOut)
-        ant.copy(file: file("LICENSE"), todir: testerOut)
-        ant.copy(file: file("THIRD-PARTY-NOTICES.md"), todir: testerOut)
-        ant.zip(destfile: new File(testerOut, "${testerName}.zip")) {
-            fileset(dir: image)
-            fileset(file: file("tester/LEEME.txt"))
-            fileset(file: file("LICENSE"))
-            fileset(file: file("THIRD-PARTY-NOTICES.md"))
-        }
-        println "Listo: ${testerOut}"
+        buildPackage('DigimonVS-0.0.3.1', 'DIGIMON-ASSISTANT 0.0.3.1',
+                ['-Ddigimon.edicion=tester', "-Ddigimon.servidor=${testerHost}".toString()], file('tester/LEEME.txt'),
+                layout.buildDirectory.dir('package/tester-input').get().asFile,
+                tasks.named('testerJar').get().archiveFileName.get(), false)
     }
 }
+

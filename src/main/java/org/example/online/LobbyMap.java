@@ -17,8 +17,8 @@ import java.util.List;
  *   - Ranking Battle   -> NPC de Batalla oficial (ranking)
  *   - Battle Reception -> NPC de Recepción de torneos
  *   - Digistorage      -> terminal de la tabla de posiciones (no hay almacenamiento)
- *   - sala en cruz     -> Training Room, bloqueada (candados del boceto)
- *   - salida este      -> portal a pisos superiores, BLOQUEADO
+ *   - sala en cruz     -> Training Room: ABIERTA, solo escena (decisión del usuario, 2026-10-01)
+ *   - salida este      -> portal: solo decorativo (no lleva a ningún lado)
  *   - salida sur       -> entrada: aquí aparecen los jugadores
  * ESTILO del arte: el boceto "Edificio Torneo - 1er piso" del usuario. Por
  * ahora el cliente lo dibuja con figuras simples; el arte final será una
@@ -26,7 +26,7 @@ import java.util.List;
  */
 public final class LobbyMap {
 
-    public static final String ID = "torneo-1f";
+    public static final String ID = "torneo-1f-v2";
     public static final int TILE = 16;
     public static final int COLS = 50;
     public static final int ROWS = 31;
@@ -41,14 +41,42 @@ public final class LobbyMap {
     public static final char NPC_RANKING = 'A';
     public static final char NPC_RECEPTION = 'B';
     public static final char TERMINAL = 'T';
+    /** PC (como en Re:Digitize): conecta con el Laboratorio para elegir el equipo (puestos 1 y 2). */
+    public static final char PC = 'K';
     public static final char PORTAL = 'P';
-    public static final char LOCKED_DOOR = 'L';
+    /** Mueble o adorno (macetas, bancas, sacos de boxeo...): se dibuja encima del piso y no se pisa. */
+    public static final char PROP = 'D';
     public static final char ENTRANCE = 'E';
     /** Piso detrás del mostrador (zona de los NPC): se dibuja como piso pero no se pisa. */
     public static final char STAFF_FLOOR = 's';
 
     /** Un punto de interés: el cliente muestra su aviso al acercarse. */
     public record Feature(char type, String label, String message, double x, double y) {}
+
+    /**
+     * Adornos (solo escena, sin funciones): tipo, casilla y tamaño en
+     * casillas. El servidor solo necesita saber que no se pisan; el cliente
+     * los dibuja según su tipo (LobbyMapRenderer).
+     */
+    public record Prop(String kind, int col, int row, int w, int h) {}
+
+    public static final List<Prop> PROPS = List.of(
+            // Pasillo principal: macetas y bancas
+            new Prop("planta", 12, 13, 1, 1), new Prop("planta", 22, 13, 1, 1),
+            new Prop("planta", 30, 13, 1, 1), new Prop("planta", 44, 13, 1, 1),
+            new Prop("planta", 12, 17, 1, 1), new Prop("planta", 44, 17, 1, 1),
+            new Prop("banca", 16, 17, 2, 1), new Prop("banca", 35, 17, 2, 1),
+            // Vitrinas de trofeos junto al mostrador
+            new Prop("vitrina", 20, 6, 1, 1), new Prop("vitrina", 32, 6, 1, 1),
+            // Entrada
+            new Prop("planta", 24, 27, 1, 1), new Prop("planta", 28, 27, 1, 1),
+            // Training Room
+            new Prop("saco", 4, 7, 1, 1), new Prop("saco", 7, 7, 1, 1),
+            new Prop("pesas", 1, 12, 1, 2), new Prop("mancuernas", 1, 17, 1, 2),
+            new Prop("dispensador", 8, 6, 1, 1),
+            new Prop("muñeco", 9, 11, 1, 1), new Prop("muñeco", 9, 19, 1, 1),
+            new Prop("trotadora", 3, 23, 2, 1), new Prop("trotadora", 7, 23, 2, 1)
+    );
 
     private static final char[][] GRID = build();
 
@@ -62,12 +90,9 @@ public final class LobbyMap {
             new Feature(TERMINAL, "Tabla de posiciones",
                     "Tabla de posiciones. (Próximamente)",
                     (17 + 1) * TILE, center(12)),
-            new Feature(PORTAL, "Portal a pisos superiores",
-                    "Portal a pisos superiores: BLOQUEADO.",
-                    (47 + 0.5) * TILE, center(15)),
-            new Feature(LOCKED_DOOR, "Training Room",
-                    "Training Room: BLOQUEADO.",
-                    center(10), center(15))
+            new Feature(PC, "PC",
+                    "PC: abre tu Laboratorio para elegir tu equipo (puesto 1 y 2).",
+                    (34 + 1) * TILE, center(12))
     );
 
     private LobbyMap() {}
@@ -87,10 +112,12 @@ public final class LobbyMap {
         fill(g, 24, 28, 28, 28, ENTRANCE);
         fill(g, 3, 6, 8, 24, TRAINING_FLOOR);     // sala en cruz (brazo vertical)
         fill(g, 1, 11, 9, 19, TRAINING_FLOOR);    // sala en cruz (brazo horizontal)
-        fill(g, 10, 13, 10, 17, LOCKED_DOOR);     // puerta bloqueada del Training Room
+        fill(g, 10, 13, 10, 17, FLOOR);           // entrada abierta del Training Room
         fill(g, 45, 12, 45, 18, FLOOR);           // antesala del portal
         fill(g, 46, 13, 48, 17, PORTAL);
         fill(g, 17, 12, 18, 12, TERMINAL);        // terminal en el muro norte
+        fill(g, 34, 12, 35, 12, PC);              // PC en el muro norte, frente a la terminal
+        for (Prop p : PROPS) fill(g, p.col(), p.row(), p.col() + p.w() - 1, p.row() + p.h() - 1, PROP);
         return g;
     }
 
@@ -107,7 +134,7 @@ public final class LobbyMap {
         return GRID[row][col];
     }
 
-    /** Solo el piso, la entrada y el piso del Training Room se pisan (este último queda aislado por la puerta). */
+    /** Se pisan el piso, la entrada y el piso del Training Room (abierto); nunca muros, mostrador, adornos ni el portal. */
     public static boolean walkable(int col, int row) {
         char c = at(col, row);
         return c == FLOOR || c == ENTRANCE || c == TRAINING_FLOOR;

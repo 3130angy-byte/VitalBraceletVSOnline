@@ -78,6 +78,9 @@ final class OfficialBattleUi {
     private final Button availabilityButton = new Button();
     private final Button freeModeButton = new Button("BATALLA LIBRE");
     private final Button originalModeButton = new Button("BATALLA ORIGINAL");
+    private final Button arenaModeButton = new Button("ARENA 2 VS 2");
+    /** ARENA 2 vs 2 online en curso (null si no hay). */
+    private OnlineArenaSession arena;
     private final Label modeInfo = new Label();
     private String mode = Protocol.MODE_FREE;
     private Timeline listRefresh;
@@ -102,6 +105,15 @@ final class OfficialBattleUi {
     }
 
     /** Cada Batalla Oficial (para que el Digimon la comente y la sume a su récord de Vital Values). */
+    /** ARENA online: antes de abrir su pantalla (recibe "empezar") y al cerrarla (tu puesto 2 cruza / vuelve por su portal). */
+    private Consumer<Runnable> arenaBefore;
+    private Runnable arenaAfter;
+
+    void setArenaHooks(Consumer<Runnable> before, Runnable after) {
+        this.arenaBefore = before;
+        this.arenaAfter = after;
+    }
+
     void setOnResult(Consumer<OfficialBattleResult> onResult) {
         this.onResult = onResult;
     }
@@ -137,6 +149,16 @@ final class OfficialBattleUi {
                 notify.accept("* " + m.optString("reason"));
             }
             case "battle" -> playBattle(m);
+            case "arenaStart" -> {
+                closeModal();
+                closeNpcDialog();
+                // La sesión vive hasta el "arenaEnd" aunque se cierre su ventana (el resultado igual se anota).
+                arena = new OnlineArenaSession(client, digimons, myId.getAsInt(), notify, onResult, arenaBefore, arenaAfter);
+                arena.handle(m);
+            }
+            case "arenaTurn", "arenaAttack", "arenaDefend", "arenaWait", "arenaSwitch", "arenaHit", "arenaEnd" -> {
+                if (arena != null) arena.handle(m);
+            }
             default -> {
                 return false;
             }
@@ -158,6 +180,9 @@ final class OfficialBattleUi {
             availabilityButton.setOnAction(e -> client.get().setAvailable(!available));
             freeModeButton.setOnAction(e -> selectMode(Protocol.MODE_FREE));
             originalModeButton.setOnAction(e -> selectMode(Protocol.MODE_ORIGINAL));
+            arenaModeButton.setOnAction(e -> selectMode(Protocol.MODE_ARENA));
+            arenaModeButton.setMaxWidth(Double.MAX_VALUE);
+            HBox.setHgrow(arenaModeButton, Priority.ALWAYS);
             freeModeButton.setMaxWidth(Double.MAX_VALUE);
             originalModeButton.setMaxWidth(Double.MAX_VALUE);
             HBox.setHgrow(freeModeButton, Priority.ALWAYS);
@@ -169,7 +194,7 @@ final class OfficialBattleUi {
             Button close = button("Cerrar", this::closeNpcDialog);
             Button refresh = button("Actualizar", () -> client.get().listAvailable());
             npcBox = new VBox(8, title, npcInfo, availabilityButton, npcError,
-                    new HBox(6, freeModeButton, originalModeButton), modeInfo, listTitle, listBox, new HBox(8, refresh, close));
+                    new HBox(6, freeModeButton, originalModeButton), arenaModeButton, modeInfo, listTitle, listBox, new HBox(8, refresh, close));
             npcBox.setPadding(new Insets(12));
             npcBox.setMaxWidth(330);
             npcBox.setMaxHeight(Region.USE_PREF_SIZE);
@@ -203,12 +228,15 @@ final class OfficialBattleUi {
                 ? "Estás disponible: otros jugadores pueden retarte."
                 : "¿Quieres quedar disponible para una Batalla Oficial?");
         availabilityButton.setText(available ? "Dejar de estar disponible" : "Ponerme disponible");
-        boolean free = Protocol.MODE_FREE.equals(mode);
-        freeModeButton.setStyle(free ? SELECTED_STYLE : BUTTON_STYLE);
-        originalModeButton.setStyle(free ? BUTTON_STYLE : SELECTED_STYLE);
-        modeInfo.setText(free
-                ? "Libre: tus stats + el bono de tus puntos (cada 10 = +50% DP, +25% HP, +1 AP; tope 120)."
-                : "Original: solo los stats de la DIM, sin bono.");
+        freeModeButton.setStyle(Protocol.MODE_FREE.equals(mode) ? SELECTED_STYLE : BUTTON_STYLE);
+        originalModeButton.setStyle(Protocol.MODE_ORIGINAL.equals(mode) ? SELECTED_STYLE : BUTTON_STYLE);
+        arenaModeButton.setStyle(Protocol.MODE_ARENA.equals(mode) ? SELECTED_STYLE : BUTTON_STYLE);
+        modeInfo.setText(switch (mode) {
+            case Protocol.MODE_ORIGINAL -> "Original: solo los stats de la DIM, sin bono. Pelea tu puesto 1.";
+            case Protocol.MODE_ARENA -> "ARENA 2 vs 2: tus puestos 1 y 2 contra los del rival, con números y defensa. "
+                    + "Los 2 deben ser Child o superior (se eligen en la PC). No cuenta para el récord.";
+            default -> "Libre: tus stats + el bono de tus puntos (cada 10 = +50% DP, +25% HP, +1 AP; tope 120). Pelea tu puesto 1.";
+        });
     }
 
     private void fillList(JSONArray players) {
@@ -259,6 +287,11 @@ final class OfficialBattleUi {
         }));
         countdown.setCycleCount(seconds);
         countdown.play();
+    }
+
+    /** Hay un reto pendiente o una pelea en curso: el servidor no deja cambiar el equipo. */
+    boolean isBusy() {
+        return modal != null || root.getCenter() != lobbyCenter || (arena != null && !arena.isOver());
     }
 
     private void closeModal() {

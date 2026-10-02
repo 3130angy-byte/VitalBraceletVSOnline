@@ -54,8 +54,17 @@ import java.io.Reader;
  */
 public final class Protocol {
 
-    /** 5: modo de Batalla Oficial (Libre / Original). Un cliente v4 ya no sirve. */
-    public static final int VERSION = 5;
+    /**
+     * 6: equipo de 2 (compañero = puesto 2), reenvío del equipo desde la PC y ARENA 2 vs 2 online.
+     * 7: mapa nuevo (Training Room abierto y adornos que no se pisan): servidor y cliente deben
+     * tener la MISMA cuadrícula, si no el dibujo y los caminos no coinciden.
+     * 8: reglas v2 de la ARENA (combo por tiempo, sin fallos, BP, BIG, GUTS) y su
+     * ataque small/big en arenaStart; un cliente v7 animaría otras reglas.
+     * 9: ARENA con stats convertidos como la app (DP x120 = BP, HP x400, AP x150) y
+     * DEFENSE / PROTECT al ser atacado (arenaDefend.canProtect, arenaDefense.protect,
+     * arenaHit.protect).
+     */
+    public static final int VERSION = 9;
     public static final int DEFAULT_PORT = 7777;
 
     /** Tamaño de la sala en unidades del mundo (el cliente lo escala a su ventana). */
@@ -65,15 +74,18 @@ public final class Protocol {
     /** Decisión del documento de diseño: hasta 20 jugadores por sala. */
     public static final int MAX_PLAYERS_PER_ROOM = 20;
 
+    /** Velocidad del avatar (unidades del mundo por segundo): el servidor mueve a esta velocidad y el cliente la usa para que el dibujo avance parejo. */
+    public static final double WALK_SPEED = 160;
+
     public static final int MAX_NAME_LENGTH = 16;
     public static final int MAX_CHAT_LENGTH = 200;
     /**
      * Una línea más larga que esto se considera abuso y se corta la conexión.
-     * 128 KB: el mensaje "digimon" (6 cuadros de hasta 64x56 + el sprite NAME
-     * en RGB565 = ~50 KB, ~67 KB en base64) es el más grande; todo lo demás
-     * mide menos de 2 KB.
+     * 256 KB: el mensaje "digimon" es el más grande (6 cuadros de hasta 64x56 +
+     * el sprite NAME en RGB565 = ~50 KB, ~67 KB en base64, POR Digimon: con el
+     * compañero del 2 vs 2, ~135 KB); todo lo demás mide menos de 2 KB.
      */
-    public static final int MAX_LINE_LENGTH = 128 * 1024;
+    public static final int MAX_LINE_LENGTH = 256 * 1024;
 
     /** Cuadros del Digimon que viajan: IDLE_1, IDLE_2, WALK_1, WALK_2, ATTACK, DODGE. */
     public static final int DIGIMON_FRAMES = 6;
@@ -92,13 +104,16 @@ public final class Protocol {
      * stats de la DIM, sin bono.
      */
     public static final String MODE_FREE = "libre", MODE_ORIGINAL = "original";
+    /** ARENA 2 vs 2 online (v6): equipo de 2, minijuegos de ataque y defensa; no cuenta para el récord. */
+    public static final String MODE_ARENA = "arena";
 
     public static boolean isValidMode(String mode) {
-        return MODE_FREE.equals(mode) || MODE_ORIGINAL.equals(mode);
+        return MODE_FREE.equals(mode) || MODE_ORIGINAL.equals(mode) || MODE_ARENA.equals(mode);
     }
 
-    /** "Batalla Libre" / "Batalla Original". */
+    /** "Batalla Libre" / "Batalla Original" / "ARENA 2 vs 2". */
     public static String modeName(String mode) {
+        if (MODE_ARENA.equals(mode)) return "ARENA 2 vs 2";
         return MODE_ORIGINAL.equals(mode) ? "Batalla Original" : "Batalla Libre";
     }
     /** Tamaño máximo de un cuadro (el lienzo de un sprite DIM). */

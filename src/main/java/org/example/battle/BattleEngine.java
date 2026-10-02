@@ -222,12 +222,17 @@ public class BattleEngine {
     }
 
     private double computeHitrate(Combatant player, Combatant enemy) {
-        double base = (player.dp / (double) (player.dp + enemy.dp)) * 100.0;
-        base += attributeAdjustment(player.attribute, enemy.attribute);
+        return hitRate(player.dp, player.attribute, enemy.dp, enemy.attribute);
+    }
+
+    /** % de acierto del VB: tu DP / (tu DP + DP rival) x 100, ±5 por atributo. También lo usa la ARENA. */
+    public static double hitRate(int dp, int attribute, int enemyDp, int enemyAttribute) {
+        double base = dp + enemyDp <= 0 ? 50 : (dp / (double) (dp + enemyDp)) * 100.0;
+        base += attributeAdjustment(attribute, enemyAttribute);
         return Math.max(0, Math.min(100, base));
     }
 
-    private double attributeAdjustment(int you, int enemy) {
+    private static double attributeAdjustment(int you, int enemy) {
         if (you == 3 && enemy == 1) return 5;
         if (you == 1 && enemy == 2) return 5;
         if (you == 2 && enemy == 3) return 5;

@@ -27,6 +27,7 @@ import javafx.stage.Screen;
 import javafx.stage.Window;
 
 import org.example.Edition;
+import org.example.lab.LabWindow;
 import org.example.animation.VPetStageTier;
 import org.example.behavior.CompanionController;
 import org.example.behavior.VPetMovementMode;
@@ -87,14 +88,16 @@ public class VPetMenu {
     private final Runnable onOpenInfoPanel;
     private final Runnable onChatOpening;
     private final Runnable onRetire;
+    private final Runnable onArena;
     private Page currentPage = Page.VPET;
     private boolean arrowOnLeft = true;
 
     public VPetMenu(Window ownerWindow, CompanionController companion, VPetStageTier stageTier,
                     AiConversationController aiController, Runnable onBattleRandom, Runnable onVsOnline,
-                    Runnable onOpenInfoPanel, Runnable onChatOpening, Runnable onRetire) {
+                    Runnable onOpenInfoPanel, Runnable onChatOpening, Runnable onRetire, Runnable onArena) {
         this.onVsOnline = onVsOnline;
         this.onRetire = onRetire;
+        this.onArena = onArena;
         this.ownerWindow = ownerWindow;
         this.companion = companion;
         this.stageTier = stageTier;
@@ -104,6 +107,9 @@ public class VPetMenu {
         this.onOpenInfoPanel = onOpenInfoPanel;
         this.onChatOpening = onChatOpening;
         popup.getContent().setAll(root);
+        // Un Popup no trae la clase ".root" del tema: sin ella los botones no encuentran sus
+        // colores base y JavaFX avisa "Could not resolve '-fx-text-base-color'" (inofensivo).
+        root.getStyleClass().add("root");
         popup.setAutoHide(true);
         showPage(Page.VPET);
     }
@@ -173,6 +179,8 @@ public class VPetMenu {
         grid.add(tile("☻", "#b48cff", "DIGIMON", true, () -> { popup.hide(); onOpenInfoPanel.run(); }), 0, 1);
         // Devuelve al Digimon al Vital Bracelet con el saldo de sus batallas (pide confirmación).
         grid.add(tile("⇪", "#ffb35c", "RETIRAR", true, () -> { popup.hide(); onRetire.run(); }), 1, 1);
+        // Laboratorio: ventana aparte; el Digimon sigue en el escritorio mientras está abierta.
+        grid.add(tile("⚗", "#7fe0a8", "LAB", true, () -> { popup.hide(); LabWindow.open(); }), 0, 2);
 
         // 0.0.3.1 (probadores) no tiene asistente ni chat IA (decisión del usuario).
         if (!Edition.ASSISTANT) {
@@ -190,6 +198,7 @@ public class VPetMenu {
         boolean canBattle = stageTier == VPetStageTier.CHILD_PLUS;
         return panel("BATALLA", list(
                         row("⚔", "#d8dde3", "ALEATORIA", canBattle, () -> { popup.hide(); onBattleRandom.run(); }),
+                        row("✦", "#ffb35c", "ARENA 2 VS 2", canBattle, () -> { popup.hide(); onArena.run(); }),
                         row("◎", "#8fd6ff", "VS ONLINE", true, () -> { popup.hide(); onVsOnline.run(); })),
                 backButton(Page.VPET));
     }
@@ -324,7 +333,14 @@ public class VPetMenu {
         // Rivales de Batalla aleatoria: la VS DIM solo trae los sprites de su Digimon (ver RivalDimPool).
         final String[] rivalFolder = {AssistantSettings.rivalDimFolder().map(Object::toString).orElse("")};
         Label rivalLabel = smallLabel(rivalFolder[0].isEmpty() ? "(sin elegir)" : rivalFolder[0]);
-        Button pickRivals = pillButton("ELEGIR CARPETA", () -> chooseFolder("Carpeta con DIM cards rivales", rivalFolder, rivalLabel));
+        // Se guarda en cuanto se elige: antes había que pulsar GUARDAR, y si el menú se
+        // cerraba al abrir el selector de carpetas, la carpeta se perdía sin avisar.
+        Button pickRivals = pillButton("ELEGIR CARPETA", () -> {
+            if (chooseFolder("Carpeta con DIM cards rivales (también se revisan sus subcarpetas)", rivalFolder, rivalLabel)) {
+                AssistantSettings.saveRivalFolder(rivalFolder[0]);
+                aiController.announce("¡Listo! Buscaré rivales en esa carpeta.");
+            }
+        });
 
         Button save = pillButton("GUARDAR", () -> {
             String code = countries.entrySet().stream()
@@ -344,16 +360,23 @@ public class VPetMenu {
         return panel("AJUSTES", body, footer);
     }
 
-    private void chooseFolder(String title, String[] holder, Label label) {
+    /** true si el usuario eligió una carpeta. El menú no se cierra mientras el selector está abierto. */
+    private boolean chooseFolder(String title, String[] holder, Label label) {
         DirectoryChooser chooser = new DirectoryChooser();
         chooser.setTitle(title);
         File current = new File(holder[0]);
         if (current.isDirectory()) chooser.setInitialDirectory(current);
-        File chosen = chooser.showDialog(ownerWindow);
-        if (chosen != null) {
-            holder[0] = chosen.getAbsolutePath();
-            label.setText(holder[0]);
+        popup.setAutoHide(false); // sin esto el menú se cerraba al perder el foco y se perdía lo elegido
+        File chosen;
+        try {
+            chosen = chooser.showDialog(ownerWindow);
+        } finally {
+            popup.setAutoHide(true);
         }
+        if (chosen == null) return false;
+        holder[0] = chosen.getAbsolutePath();
+        label.setText(holder[0]);
+        return true;
     }
 
     private void selectMode(VPetMovementMode mode) {

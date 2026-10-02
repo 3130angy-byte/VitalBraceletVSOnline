@@ -4,9 +4,9 @@ DIGIMON VS ONLINE - versión de prueba 0.0.3.1
 Qué es
 ------
 Tu Digimon del Vital Bracelet vive en tu escritorio, pelea Batallas
-aleatorias y entra a la sala del VS Online para pelear contra otros
-jugadores. Al final lo RETIRAS y el programa te da una VS DIM nueva con el
-resultado de sus batallas para devolverlo al Vital Bracelet.
+aleatorias y la ARENA 2 vs 2, y entra a la sala del VS Online para pelear
+contra otros jugadores. Al final lo RETIRAS y el programa te da una VS DIM con
+el resultado de sus batallas para devolverlo al Vital Bracelet.
 
 Esta versión NO tiene asistente ni chat con IA. No necesitas instalar Java:
 viene incluido.
@@ -16,7 +16,10 @@ Antes de empezar
 1. Windows 10 u 11 de 64 bits.
 2. Tailscale instalado y unido a la red del anfitrión (él te manda la
    invitación). Sin Tailscale no llegas al servidor.
-3. Tu Digimon sacado del Vital Bracelet como VS DIM (.bin), con tu programa
+3. Pídele al anfitrión que te AGREGUE A SU LISTA con el nombre exacto que vas
+   a usar. Si tu nombre no está en su lista, no entras a la sala del VS
+   Online (las funciones locales sí funcionan igual).
+4. Tu Digimon sacado del Vital Bracelet como VS DIM (.bin), con tu programa
    de siempre para leer la tarjeta.
    GUARDA UNA COPIA de ese archivo antes de todo.
 
@@ -26,33 +29,42 @@ Cómo jugar
    (dentro de la carpeta DigimonVS-0.0.3.1).
    Si Windows avisa "Windows protegió su PC": "Más información" > "Ejecutar
    de todas formas" (el programa no tiene firma digital).
-2. Escribe tu nombre de usuario. El servidor ya viene puesto; no lo cambies
-   salvo que el anfitrión te diga otro.
-3. "Cargar mi Digimon (VS DIM)": elige tu .bin, escribe cuántos días tenía y
-   qué Digimon es. Aparecerá en tu escritorio saliendo de un portal.
+2. Escribe tu nombre de usuario (el mismo que le diste al anfitrión) y, en
+   "Servidor", la IP de Tailscale que te pase el anfitrión (viene "100.x" como
+   ejemplo). Si no la tienes, el juego arranca igual con las funciones locales.
+3. "Cargar mi Digimon (VS DIM)": elige tu .bin y escribe cuántos días tenía.
+   La especie se lee sola del nombre que trae la VS DIM (puedes corregirla).
+   Aparecerá en tu escritorio saliendo de un portal. Puedes tener 2 Digimon
+   (puesto 1 y puesto 2).
 4. Clic derecho sobre tu Digimon = menú.
-   - BATALLA > VS ONLINE: entra a la sala. Camina con clic. Acércate al NPC
-     "Batalla oficial" para ponerte disponible y retar a otros (Batalla
-     Libre = con el bono de tus trofeos; Batalla Original = sin bono).
-   - BATALLA > ALEATORIA: contra Digimon de DIM cards normales (te pide
-     una carpeta con .bin la primera vez).
+   - BATALLA > VS ONLINE: entra a la sala (si estás en la lista). Camina con
+     clic. El NPC "Batalla oficial" te deja retar a otros: Batalla Libre (con
+     el bono de tus trofeos), Batalla Original (sin bono) o ARENA 2 vs 2. La
+     PC de la sala abre tu Laboratorio para cambiar tu equipo.
+   - BATALLA > ALEATORIA y ARENA 2 VS 2: contra Digimon de DIM cards normales.
+     Agrégalas en LAB > RIVALES (elige una carpeta o agrega archivos .bin).
    - DIGIMON: sus stats, rango y bono.
+   - LAB: tus cápsulas (copias de tus VS DIM), Digidex, historial y rivales.
    - RETIRAR: lo devuelve al Vital Bracelet (ver abajo).
+
+ARENA 2 vs 2
+------------
+Tu puesto 1 y tu puesto 2 contra otro equipo. ATTACK = toca los números en
+orden durante 10 segundos: el combo sube tu ataque (con 10 o más, BIG
+ATTACK). Al ser atacado eliges DEFENSE (detén la barra en el escudo) o
+PROTECT (tu compañero recibe el golpe). Con el medidor lleno: W-ATTACK.
+No cuenta para el récord del Vital Bracelet.
 
 Retirar y devolverlo al Vital Bracelet
 --------------------------------------
-Cada batalla suma o resta Vital Values según la etapa del rival (Ultimate
-500, Perfect 200, Adult 80, Child 30; valores de prueba). Al RETIRAR ves el
-saldo y, si aceptas, el Digimon se va por un portal, se abre la carpeta con
-la VS DIM nueva y vuelve la pantalla de inicio.
-- Saldo positivo = vuelve ganando Vital Values; negativo = los pierde.
-- Si cierras el programa SIN retirarlo, el saldo se pierde (en esta versión
-  no se guarda).
-- La VS DIM original no se toca. Pasa al Vital Bracelet la NUEVA (carpeta
-  "devoluciones"). Hazlo con tu copia de seguridad a mano.
-- LIMITACIÓN CONOCIDA: el Vital Bracelet acepta el archivo, pero todavía NO
-  toma el resultado: el Digimon vuelve sin recompensa ni castigo, como si no
-  hubiera peleado. Se está investigando.
+Cada batalla oficial o aleatoria cuenta. Al RETIRAR ves el resumen y, si
+aceptas, el Digimon se va por un portal, se abre la carpeta "devoluciones"
+con la VS DIM nueva y vuelve la pantalla de inicio. Esa VS DIM lleva el
+resultado: al devolverla, el Vital Bracelet entrega la recompensa o el
+castigo él mismo (probado en un VB real). El récord pendiente se guarda en
+la cápsula aunque cierres el programa.
+La VS DIM original no se toca. Pasa al Vital Bracelet la NUEVA, con tu copia
+de seguridad a mano.
 
 Licencia
 --------
@@ -63,11 +75,5 @@ terceros: THIRD-PARTY-NOTICES.md.
 Dónde quedan tus datos
 ----------------------
 En D:\DigimonProjectData si tienes disco D:, y si no, en la carpeta
-DigimonProjectData dentro de tu usuario de Windows. Ahí está "devoluciones".
-
-Solo el anfitrión
------------------
-"Servidor VS Online.exe" arranca el servidor en una ventana negra.
-Comandos: jugadores, expulsar <nombre>, apagar, ayuda.
-Tiene que estar abierto mientras los demás juegan, y Windows debe permitir
-el puerto 7777 (cuando lo pregunte el firewall: "Permitir acceso").
+DigimonProjectData dentro de tu usuario de Windows. Ahí están "devoluciones"
+y "laboratorio".

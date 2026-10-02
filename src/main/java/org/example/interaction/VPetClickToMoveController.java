@@ -44,6 +44,11 @@ public class VPetClickToMoveController {
         }
     }
 
+    /** Suelta la selección sin mover (p. ej. al empezar la animación del portal). */
+    public void cancel() {
+        if (selected) deselect();
+    }
+
     private void select() {
         selected = true;
         showOverlay();
