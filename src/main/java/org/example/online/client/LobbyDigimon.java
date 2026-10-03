@@ -22,8 +22,8 @@ import java.util.List;
  * reciben archivos de imagen: así ningún jugador puede mandar un PNG/JPG
  * malicioso al decodificador de imágenes de los demás.
  *
- * Tamaño: los sprites DIM (hasta 64x56) son enormes frente al avatar de
- * 16x24 en casillas de 16: en el MUNDO miden la mitad, pero la cámara de la
+ * Tamaño: los sprites DIM (hasta 64x56) son enormes frente a las casillas
+ * de 16: en el MUNDO miden la mitad (como el avatar), pero la cámara de la
  * sala acerca x2, así que en pantalla se ven con sus píxeles originales 1:1.
  *
  * Seguimiento: recorre el mismo camino del avatar (ver follow). Es solo

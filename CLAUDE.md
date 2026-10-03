@@ -674,21 +674,32 @@ la depuración; siguen existiendo en 0.0.2).
   convención del proyecto). Cuadros: 0 quieto, 1-2 caminar; la dirección y
   el cuadro los deduce el cliente del movimiento (`AvatarAnim`); se dibuja
   por orden de altura y con marcador cian sobre el propio jugador.
-  **Avatar nuevo (2026-10-01, referencias del usuario)**: de PERFIL con
-  proporciones REALISTAS (no chibi: cabeza chica, cuerpo alto), cabello negro
-  despeinado con mechones cortos, ojo pequeño, nariz, oreja; chaqueta azul
-  ABIERTA sobre polera blanca, pantalón negro, zapatillas oscuras con suela
-  blanca. SOLO izquierda/derecha (decisión del usuario, como los Digimon): mira
-  a la izquierda y se espeja; al ir derecho arriba o abajo conserva hacia dónde
-  miraba. Imagen 36x60 px = 18x30 en el mundo (1:1 con la cámara x2, como los
-  Digimon). Se GENERA por capas (elipses, polígonos, segmentos gruesos) con
-  contorno automático por capa y extremidades de atrás oscurecidas; caminata
-  de 6 cuadros a partir de ángulos de cadera/rodilla/hombro (`LEG_CYCLE`), el
-  cuerpo sube y baja solo (apoya el pie más bajo) y la cadera se redondea a
-  píxel entero para que la cara no tiemble. Cabeza x1.15 (`HEAD_SCALE`) para
-  que la cara se lea. Cuadro 0 quieto, 1-6 caminando (110 ms cada uno).
-  Colores en `Palette` (pelo, chaqueta, polera, pantalón, zapatillas) para el
-  editor futuro. Ya no hay vistas de frente ni de espaldas.
+  **Avatar adolescente 16 bits (2026-10-02, hoja de referencia + especificación
+  del usuario; reemplaza al avatar de perfil generado por capas)**: cabello
+  oscuro despeinado, casaca azul abierta, polera blanca, pantalón gris,
+  zapatillas grises con suela blanca. La referencia (4 filas x 7 cuadros, hecha
+  con IA) salió con los cuadros deformados y distintos entre sí; el usuario
+  eligió SOLO el quieto de perfil (2.ª fila, 1.º de la izquierda) y la caminata
+  se GENERA a partir de él. Sigue siendo SOLO DE LADO: mira a la izquierda y se
+  espeja a la derecha (convención del proyecto); arriba/abajo conserva el lado.
+  `AvatarSprites` CARGA `resources/avatar/adolescente.png`: UNA fila de 9
+  celdas de 64x64 (0 = quieto, el original tal cual; 1-8 = caminata, 85 ms por
+  cuadro), fondo transparente, solo los 18 colores de la paleta de la
+  especificación (recolorear para el editor futuro = cambiar colores). La hoja
+  la genera `tools/GenerarAvatar.java` desde
+  `tools/avatar/referencia-adolescente.webp`. Extracción: cuadrícula vertical
+  regular de 5,358 px; la horizontal se desvía y se busca por sprite; color =
+  mediana del centro de cada celda + paleta más cercana en CIELAB; pies en la
+  fila 61 y cabeza centrada. Caminata (`GenerarAvatar.Walk`): cabeza y casaca
+  copiadas del quieto (filas ≤ 45, bajan 1 px con las piernas abiertas) +
+  piernas redibujadas (muslo/rodilla por cuadro, `CYCLE`, la de atrás más
+  oscura y medio ciclo desfasada), zapatilla que gira con el pie (punta abajo
+  al despegar) y mano que se balancea ±2 px al revés que la pierna de
+  adelante. Las medidas (cadera, casaca, mano) son las de ESE sprite: si
+  cambia la referencia, revisarlas con la vista. El personaje mide 50 px (no
+  los 58 de la especificación: así está dibujado, y agrandarlo deformaría los
+  píxeles). Celda 64x64 = 32x32 en el mundo (1:1 con la cámara x2). Probado
+  fuera de pantalla (render con el mapa y la cámara de la sala).
   **Digimon que sigue al avatar + rango HECHO** (protocolo v3): el cliente
   manda su Digimon una vez (`LobbyDigimon.payloadFrom`): especie, atributo,
   etapa, Power Trophies y 4 cuadros (IDLE_1, IDLE_2, WALK_1, WALK_2) como

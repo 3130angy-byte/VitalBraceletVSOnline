@@ -109,9 +109,8 @@ public final class LobbyWindow {
     private final Map<Integer, String> names = new HashMap<>();
     private int myId = -1;
     private Image mapImage;
-    /** Un solo avatar por ahora (el editor de personajes vendrá después): todos usan el mismo. */
     /** Un solo avatar por ahora (el editor de personajes vendrá después), de lado: mira a la izquierda y se espeja a la derecha. */
-    private final Image[] avatarFrames = AvatarSprites.build(AvatarSprites.Palette.defaultUrban());
+    private final AvatarSprites avatar = AvatarSprites.load();
     private final Map<Integer, AvatarAnim> anims = new HashMap<>();
     private final Map<Integer, LobbyDigimon> digimons = new HashMap<>();
     /** Cambios de Digimon por portal en curso, por jugador (LobbyPortalSwap). */
@@ -377,22 +376,23 @@ public final class LobbyWindow {
     private void drawAvatar(GraphicsContext g, int id, double[] pos) {
         AvatarAnim a = anims.get(id);
         if (a == null) return;
-        Image frame = avatarFrames[a.frame];
+        Image frame = avatar.frame(a.frame);
         // Coordenadas del MUNDO: la cámara (escala y desplazamiento) ya está aplicada al GraphicsContext.
         double px = pos[0], py = pos[1];
         double w = AvatarSprites.WIDTH, h = AvatarSprites.HEIGHT;
-        double top = py + FEET_OFFSET - h;
+        double frameTop = py + FEET_OFFSET - AvatarSprites.FEET;
+        double top = frameTop + avatar.headTop(); // lo más alto del cabello: el nombre va encima
 
         g.setFill(Color.rgb(0, 0, 0, 0.18));
-        g.fillOval(px - w * 0.4, py + FEET_OFFSET - 1.5, w * 0.8, 3);
+        g.fillOval(px - 7, py + FEET_OFFSET - 1.5, 14, 3);
         if (a.facingRight) {
             g.save();
             g.translate(px, 0);
             g.scale(-1, 1); // convención del proyecto: derecha = espejado
-            g.drawImage(frame, -w / 2, top, w, h);
+            g.drawImage(frame, -w / 2, frameTop, w, h);
             g.restore();
         } else {
-            g.drawImage(frame, px - w / 2, top, w, h);
+            g.drawImage(frame, px - w / 2, frameTop, w, h);
         }
 
         // Nombre del jugador y, si trajo Digimon, el rango de ese Digimon (nunca stats).
@@ -418,7 +418,7 @@ public final class LobbyWindow {
 
     /**
      * El Digimon con los pies en su posición, espejado al ir a la derecha. En
-     * el mundo mide la mitad de su sprite (frente al avatar de 16x24), y con
+     * el mundo mide la mitad de su sprite (igual que el avatar), y con
      * la cámara x2 se ve con sus píxeles originales 1:1.
      */
     private void drawDigimon(GraphicsContext g, LobbyDigimon d) {
@@ -644,8 +644,8 @@ public final class LobbyWindow {
      */
     private static final class AvatarAnim {
         private static final double MOVING_THRESHOLD = 0.05;
-        /** 6 cuadros por ciclo (dos pasos): un cuadro cada 110 ms. */
-        private static final long STEP_NANOS = 110_000_000L;
+        /** 8 cuadros por ciclo (dos pasos): un cuadro cada 85 ms. */
+        private static final long STEP_NANOS = 85_000_000L;
         /**
          * El dibujo alcanza la posición del servidor un instante antes de que
          * llegue la siguiente foto: sin este margen el avatar "parpadearía" a
